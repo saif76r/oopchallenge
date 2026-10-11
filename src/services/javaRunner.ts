@@ -16,6 +16,12 @@ function evaluateJavaLocally(code: string): ExecutionResult {
 }
 
 export async function runJavaCode(code: string, stdin: string = ''): Promise<ExecutionResult> {
+  // Execute immediately using the built-in Java AST engine (< 10ms)
+  const localRes = evaluateJavaLocally(code);
+  if (localRes.success || localRes.runtimeError) {
+    return localRes;
+  }
+
   try {
     const response = await fetch('/api/java/run', {
       method: 'POST',
@@ -24,7 +30,7 @@ export async function runJavaCode(code: string, stdin: string = ''): Promise<Exe
     });
 
     if (!response.ok) {
-      return evaluateJavaLocally(code);
+      return localRes;
     }
 
     const data = await response.json();
@@ -39,7 +45,7 @@ export async function runJavaCode(code: string, stdin: string = ''): Promise<Exe
       allTestsPassed: false,
     };
   } catch {
-    return evaluateJavaLocally(code);
+    return localRes;
   }
 }
 
@@ -48,22 +54,23 @@ export async function testJavaChallenge(
   testCases: TestCase[],
   missionId: string
 ): Promise<ExecutionResult> {
-  try {
-    const response = await fetch('/api/java/test', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, testCases, missionId }),
-    });
+  // Run fast local Java AST engine first (< 10ms)
+  let localExec = evaluateJavaLocally(code);
 
-    if (response.ok) {
-      return await response.json();
-    }
-  } catch {
-    // Fall through to local AST test runner
-  }
-
-  const localExec = evaluateJavaLocally(code);
   if (localExec.compilationError) {
+    try {
+      const response = await fetch('/api/java/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, testCases, missionId }),
+      });
+
+      if (response.ok) {
+        return await response.json();
+      }
+    } catch {
+      // Fall through to local result
+    }
     return localExec;
   }
 

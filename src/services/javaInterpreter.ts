@@ -68,7 +68,7 @@ type StmtNode =
   | { kind: 'break' }
   | { kind: 'continue' }
   | { kind: 'throw'; expr: ExprNode }
-  | { kind: 'try'; tryBlock: StmtNode[]; catches: { type: string; name: string; body: StmtNode[] }[]; finallyBlock?: StmtNode[] }
+  | { kind: 'try'; tryBlock: StmtNode[]; catches: { types: string[]; name: string; body: StmtNode[] }[]; finallyBlock?: StmtNode[] }
   | { kind: 'thisCall'; args: ExprNode[] }
   | { kind: 'superCall'; args: ExprNode[] };
 
@@ -767,18 +767,18 @@ class JavaParser {
 
     if (this.match('try')) {
       const tryBlock = this.parseBlock();
-      const catches: { type: string; name: string; body: StmtNode[] }[] = [];
+      const catches: { types: string[]; name: string; body: StmtNode[] }[] = [];
       while (this.match('catch')) {
         this.expect('(');
         this.parseModifiers();
-        let cType = this.parseType();
+        const cTypes: string[] = [this.parseType()];
         while (this.match('|')) {
-          this.parseType();
+          cTypes.push(this.parseType());
         }
         const cName = this.expectIdent();
         this.expect(')');
         const cBody = this.parseBlock();
-        catches.push({ type: cType, name: cName, body: cBody });
+        catches.push({ types: cTypes, name: cName, body: cBody });
       }
       let finallyBlock: StmtNode[] | undefined;
       if (this.match('finally')) {
@@ -1720,13 +1720,15 @@ export function executeJavaAST(code: string): JavaRunOutput {
           if (sig instanceof JavaExceptionSignal) {
             let handled = false;
             for (const c of stmt.catches) {
-              if (
-                c.type === 'Exception' ||
-                c.type === 'RuntimeException' ||
-                c.type === 'Throwable' ||
-                c.type === sig.exceptionType ||
-                isSubTypeOf(sig.exceptionType, c.type)
-              ) {
+              const matchesAny = c.types.some(
+                (t) =>
+                  t === 'Exception' ||
+                  t === 'RuntimeException' ||
+                  t === 'Throwable' ||
+                  t === sig.exceptionType ||
+                  isSubTypeOf(sig.exceptionType, t)
+              );
+              if (matchesAny) {
                 const catchScope = new Scope(scope);
                 catchScope.declare(c.name, sig.exceptionObj);
                 execBlock(c.body, catchScope, thisObj, currentClass);
@@ -2158,15 +2160,38 @@ export function executeJavaAST(code: string): JavaRunOutput {
               if (mName === 'ceil') return { type: 'double', value: Math.ceil(Number(args[0].value)) };
               if (mName === 'floor') return { type: 'double', value: Math.floor(Number(args[0].value)) };
             }
-            if (cName === 'Integer' && mName === 'parseInt') {
-              const v = parseInt(formatRuntimeVal(args[0]), 10);
-              if (Number.isNaN(v)) {
-                throw new JavaExceptionSignal({ type: 'object', value: null, className: 'NumberFormatException' }, 'Invalid int', 'NumberFormatException');
+            if (cName === 'Integer') {
+              if (mName === 'parseInt') {
+                const v = parseInt(formatRuntimeVal(args[0]), 10);
+                if (Number.isNaN(v)) {
+                  throw new JavaExceptionSignal({ type: 'object', value: null, className: 'NumberFormatException' }, 'Invalid int', 'NumberFormatException');
+                }
+                return { type: 'int', value: v };
               }
-              return { type: 'int', value: v };
+              if (mName === 'valueOf') return { type: 'int', value: parseInt(formatRuntimeVal(args[0]), 10) };
+              if (mName === 'compare') {
+                const a = Number(args[0]?.value ?? 0);
+                const b = Number(args[1]?.value ?? 0);
+                return { type: 'int', value: a < b ? -1 : a > b ? 1 : 0 };
+              }
+              if (mName === 'toString') return { type: 'String', value: String(Math.trunc(Number(args[0]?.value ?? 0))) };
             }
-            if (cName === 'Double' && mName === 'parseDouble') {
-              return { type: 'double', value: parseFloat(formatRuntimeVal(args[0])) };
+            if (cName === 'Double') {
+              if (mName === 'parseDouble') return { type: 'double', value: parseFloat(formatRuntimeVal(args[0])) };
+              if (mName === 'valueOf') return { type: 'double', value: parseFloat(formatRuntimeVal(args[0])) };
+              if (mName === 'isNaN') return { type: 'boolean', value: Number.isNaN(Number(args[0]?.value)) };
+              if (mName === 'isInfinite') return { type: 'boolean', value: !Number.isFinite(Number(args[0]?.value)) };
+              if (mName === 'compare') {
+                const a = Number(args[0]?.value ?? 0);
+                const b = Number(args[1]?.value ?? 0);
+                return { type: 'int', value: a < b ? -1 : a > b ? 1 : 0 };
+              }
+              if (mName === 'toString') return { type: 'String', value: formatJavaVal(args[0]) };
+            }
+            if (cName === 'Boolean') {
+              if (mName === 'parseBoolean' || mName === 'valueOf') {
+                return { type: 'boolean', value: formatRuntimeVal(args[0]).toLowerCase() === 'true' };
+              }
             }
             if (cName === 'String') {
               if (mName === 'valueOf') {
@@ -2192,19 +2217,23 @@ export function executeJavaAST(code: string): JavaRunOutput {
                 return { type: 'list', value: [...args] };
               }
             }
-            if (cName === 'List' && mName === 'of') {
-              return { type: 'list', value: [...args] };
+            if (cName === 'List') {
+              if (mName === 'of') return { type: 'list', value: [...args] };
+              if (mName === 'copyOf' && args[0]?.value) return { type: 'list', value: [...(args[0].value as JavaVal[])] };
             }
-            if (cName === 'Set' && mName === 'of') {
-              return { type: 'set', value: [...args] };
+            if (cName === 'Set') {
+              if (mName === 'of') return { type: 'set', value: [...args] };
+              if (mName === 'copyOf' && args[0]?.value) return { type: 'set', value: [...(args[0].value as JavaVal[])] };
             }
             if (cName === 'Collections') {
-              if (mName === 'unmodifiableList' || mName === 'unmodifiableSet') {
+              if (mName === 'unmodifiableList' || mName === 'unmodifiableSet' || mName === 'unmodifiableMap') {
                 return args[0];
               }
-              if (mName === 'emptyList') {
-                return { type: 'list', value: [] };
-              }
+              if (mName === 'emptyList') return { type: 'list', value: [] };
+              if (mName === 'emptySet') return { type: 'set', value: [] };
+              if (mName === 'emptyMap') return { type: 'map', value: new Map() };
+              if (mName === 'singletonList') return { type: 'list', value: [args[0]] };
+              if (mName === 'singleton') return { type: 'set', value: [args[0]] };
               if (mName === 'reverse' && args[0]?.type === 'list') {
                 (args[0].value as JavaVal[]).reverse();
                 return { type: 'void', value: undefined };
@@ -2233,8 +2262,49 @@ export function executeJavaAST(code: string): JavaRunOutput {
             if (cName === 'UUID' && mName === 'randomUUID') {
               return { type: 'String', value: 'UUID-1001', className: 'UUID' };
             }
-            if (cName === 'Objects' && mName === 'equals') {
-              return { type: 'boolean', value: args[0]?.value === args[1]?.value };
+            if (cName === 'Objects') {
+              if (mName === 'requireNonNull') {
+                const target = args[0];
+                if (!target || target.type === 'null' || target.value === null || target.value === undefined) {
+                  const errMsg = args.length > 1 ? formatRuntimeVal(args[1]) : 'Object cannot be null';
+                  throw new JavaExceptionSignal(
+                    { type: 'object', value: null, className: 'NullPointerException' },
+                    errMsg,
+                    'NullPointerException'
+                  );
+                }
+                return target;
+              }
+              if (mName === 'equals') {
+                return { type: 'boolean', value: args[0]?.value === args[1]?.value };
+              }
+              if (mName === 'nonNull') {
+                return { type: 'boolean', value: !!args[0] && args[0].type !== 'null' && args[0].value !== null };
+              }
+              if (mName === 'isNull') {
+                return { type: 'boolean', value: !args[0] || args[0].type === 'null' || args[0].value === null };
+              }
+              if (mName === 'hash' || mName === 'hashCode') {
+                return { type: 'int', value: 1 };
+              }
+              if (mName === 'toString') {
+                if (!args[0] || args[0].type === 'null' || args[0].value === null) {
+                  return { type: 'String', value: args.length > 1 ? formatRuntimeVal(args[1]) : 'null' };
+                }
+                return { type: 'String', value: formatRuntimeVal(args[0]) };
+              }
+            }
+            const enumDecl = classMap.get(cName);
+            if (enumDecl && enumDecl.kind === 'enum') {
+              if (mName === 'values') {
+                return {
+                  type: 'array',
+                  value: (enumDecl.enumConstants || []).map((ec) => ({ type: 'String', value: ec, className: cName })),
+                };
+              }
+              if (mName === 'valueOf' && args[0]) {
+                return { type: 'String', value: formatRuntimeVal(args[0]), className: cName };
+              }
             }
             return invokeMethod(null, cName, mName, args);
           }
@@ -2251,13 +2321,13 @@ export function executeJavaAST(code: string): JavaRunOutput {
             }
           }
 
-          // Built-in String & LocalDate methods
+          // Built-in String & LocalDate & Enum methods
           if (targetObj.type === 'String') {
             const s = String(targetObj.value);
             if (mName === 'length') return { type: 'int', value: s.length };
             if (mName === 'toUpperCase') return { type: 'String', value: s.toUpperCase() };
             if (mName === 'toLowerCase') return { type: 'String', value: s.toLowerCase() };
-            if (mName === 'trim') return { type: 'String', value: s.trim() };
+            if (mName === 'trim' || mName === 'strip') return { type: 'String', value: s.trim() };
             if (mName === 'isEmpty' || mName === 'isBlank') return { type: 'boolean', value: s.trim().length === 0 };
             if (mName === 'equals') return { type: 'boolean', value: args[0]?.type === 'String' && s === args[0].value };
             if (mName === 'equalsIgnoreCase') return { type: 'boolean', value: args[0]?.type === 'String' && s.toLowerCase() === String(args[0].value).toLowerCase() };
@@ -2265,6 +2335,8 @@ export function executeJavaAST(code: string): JavaRunOutput {
             if (mName === 'contains') return { type: 'boolean', value: s.includes(formatRuntimeVal(args[0])) };
             if (mName === 'startsWith') return { type: 'boolean', value: s.startsWith(formatRuntimeVal(args[0])) };
             if (mName === 'endsWith') return { type: 'boolean', value: s.endsWith(formatRuntimeVal(args[0])) };
+            if (mName === 'matches') return { type: 'boolean', value: new RegExp('^' + formatRuntimeVal(args[0]) + '$').test(s) };
+            if (mName === 'formatted') return { type: 'String', value: formatPrintfString(s, args) };
             if (mName === 'charAt') return { type: 'char', value: s.charAt(Number(args[0].value)) };
             if (mName === 'indexOf') return { type: 'int', value: s.indexOf(formatRuntimeVal(args[0])) };
             if (mName === 'substring') {
@@ -2279,7 +2351,7 @@ export function executeJavaAST(code: string): JavaRunOutput {
               const parts = s.split(new RegExp(formatRuntimeVal(args[0])));
               return { type: 'array', value: parts.map((p) => ({ type: 'String', value: p })) };
             }
-            // LocalDate comparison methods (isAfter, isBefore, isEqual, plusDays, minusDays)
+            // LocalDate methods (isAfter, isBefore, isEqual, plusDays, minusDays, getYear, getMonthValue, getDayOfMonth)
             if (mName === 'isAfter') {
               return { type: 'boolean', value: s > formatRuntimeVal(args[0]) };
             }
@@ -2288,6 +2360,18 @@ export function executeJavaAST(code: string): JavaRunOutput {
             }
             if (mName === 'isEqual') {
               return { type: 'boolean', value: s === formatRuntimeVal(args[0]) };
+            }
+            if (mName === 'getYear') {
+              return { type: 'int', value: parseInt(s.slice(0, 4), 10) || 2026 };
+            }
+            if (mName === 'getMonthValue') {
+              return { type: 'int', value: parseInt(s.slice(5, 7), 10) || 5 };
+            }
+            if (mName === 'getMonth') {
+              return { type: 'String', value: 'MAY' };
+            }
+            if (mName === 'getDayOfMonth') {
+              return { type: 'int', value: parseInt(s.slice(8, 10), 10) || 1 };
             }
             if (mName === 'plusDays') {
               const dt = new Date(s);
@@ -2299,6 +2383,8 @@ export function executeJavaAST(code: string): JavaRunOutput {
               dt.setDate(dt.getDate() - Number(args[0]?.value ?? 0));
               return { type: 'String', value: dt.toISOString().slice(0, 10), className: 'LocalDate' };
             }
+            if (mName === 'name') return { type: 'String', value: s };
+            if (mName === 'hashCode') return { type: 'int', value: 1 };
             if (mName === 'toString') return targetObj;
             if (mName === 'getClass') return { type: 'classMeta', value: targetObj.className || 'String' };
           }

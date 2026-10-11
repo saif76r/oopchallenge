@@ -59,6 +59,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
             loop
             muted
             playsInline
+            preload="auto"
+            disablePictureInPicture
             className="w-full h-full object-cover opacity-[0.88]"
           />
           <div className="absolute inset-0 bg-gradient-to-t md:bg-gradient-to-r from-[#070913]/70 via-[#070913]/35 to-transparent" />

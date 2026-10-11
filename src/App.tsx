@@ -136,6 +136,8 @@ export default function App() {
           loop
           muted
           playsInline
+          preload="auto"
+          disablePictureInPicture
           className="w-full h-full object-cover opacity-[0.88]"
         />
         <div className="absolute inset-0 bg-[#070913]/30" />

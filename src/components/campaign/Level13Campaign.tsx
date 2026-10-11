@@ -277,6 +277,8 @@ export const Level13Campaign: React.FC<Level13CampaignProps> = ({
                 src={bossImgUrl}
                 alt="The Eclipse Boss"
                 referrerPolicy="no-referrer"
+                loading="eager"
+                decoding="async"
                 className="w-full h-full object-cover transition-transform duration-700 hover:scale-105"
               />
               {isDragonDefeated && (

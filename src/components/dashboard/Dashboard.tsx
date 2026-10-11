@@ -1,5 +1,6 @@
 import React from 'react';
 import { UserProgress, Level } from '../../types';
+import { isEternalKingdomUnlocked } from '../../services/storage';
 import { CURRICULUM } from '../../content/curriculum';
 import { ACHIEVEMENTS } from '../../content/achievements';
 import bgVideoUrl from '../../video/video.mp4';
@@ -215,59 +216,107 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
 
         {/* Card 2: Eternal Kingdom (Final Campaign) */}
-        <div
-          onClick={onNavigateToCampaign}
-          className="group bg-gradient-to-b from-[#140e29]/40 to-[#0b0e1b]/30 backdrop-blur-xl border border-amber-500/30 hover:border-amber-400/60 rounded-2xl p-6 flex flex-col justify-between transition-all cursor-pointer shadow-xl hover:shadow-amber-950/20"
-        >
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-mono font-medium text-amber-400 flex items-center gap-1.5">
-                <Crown className="w-4 h-4" />
-                FINAL CAMPAIGN
-              </span>
-              <span className="text-xs font-mono text-slate-300">LEVEL 18</span>
-            </div>
+        {(() => {
+          const isCampaignUnlocked = isEternalKingdomUnlocked(progress);
+          const completedPrereqCount = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].filter((id) =>
+            progress.completedLevelIds.includes(id)
+          ).length;
 
-            <div>
-              <h2 className="text-xl font-display font-bold text-white group-hover:text-amber-300 transition-colors">
-                Eternal Kingdom
-              </h2>
-              <p className="text-xs text-slate-200 mt-1.5 leading-relaxed">
-                A comprehensive 5-stage RPG architecture challenge. Build world entities, design dynamic combat dispatch, protect collections, and slay the Eclipse Dragon.
-              </p>
-            </div>
-
-            <div className="p-3 bg-slate-950/40 backdrop-blur-md border border-white/10 rounded-xl text-xs space-y-1.5">
-              <div className="flex items-center justify-between text-slate-400">
-                <span>Status</span>
-                <span className="text-indigo-400 font-medium">
-                  {progress.unlockedLevelIds.includes(18) ? 'Unlocked' : 'Requires Level 17'}
-                </span>
-              </div>
-              <div className="flex items-center justify-between text-slate-400">
-                <span>Boss Health</span>
-                <span className="font-mono text-amber-300">
-                  {progress.campaignCheckpoint.dragonDefeated
-                    ? '0 (Defeated)'
-                    : `${progress.campaignCheckpoint.bossHealthRemaining} HP`}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="pt-5">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onNavigateToCampaign();
-              }}
-              className="w-full py-2.5 px-4 bg-amber-600/90 hover:bg-amber-500 text-white rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
+          return (
+            <div
+              onClick={isCampaignUnlocked ? onNavigateToCampaign : onNavigateToMap}
+              className={`group bg-gradient-to-b from-[#140e29]/40 to-[#0b0e1b]/30 backdrop-blur-xl border rounded-2xl p-6 flex flex-col justify-between transition-all cursor-pointer shadow-xl ${
+                isCampaignUnlocked
+                  ? 'border-amber-500/30 hover:border-amber-400/60 hover:shadow-amber-950/20'
+                  : 'border-slate-800/80 hover:border-slate-700/80 opacity-90'
+              }`}
             >
-              <Crown className="w-3.5 h-3.5" />
-              <span>Enter Eternal Kingdom</span>
-            </button>
-          </div>
-        </div>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className={`text-xs font-mono font-medium flex items-center gap-1.5 ${
+                    isCampaignUnlocked ? 'text-amber-400' : 'text-slate-400'
+                  }`}>
+                    {isCampaignUnlocked ? (
+                      <Crown className="w-4 h-4 text-amber-400" />
+                    ) : (
+                      <Lock className="w-4 h-4 text-red-400" />
+                    )}
+                    {isCampaignUnlocked ? 'FINAL CAMPAIGN' : 'LOCKED CAMPAIGN'}
+                  </span>
+                  <span className="text-xs font-mono text-slate-300">LEVEL 18</span>
+                </div>
+
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-xl font-display font-bold text-white group-hover:text-amber-300 transition-colors">
+                      Eternal Kingdom
+                    </h2>
+                    {!isCampaignUnlocked && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-red-950/60 text-red-300 border border-red-800/60">
+                        SEALED
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-200 mt-1.5 leading-relaxed">
+                    A comprehensive 5-stage RPG architecture challenge. Build world entities, design dynamic combat dispatch, protect collections, and slay the Eclipse Boss.
+                  </p>
+                </div>
+
+                <div className="p-3 bg-slate-950/40 backdrop-blur-md border border-white/10 rounded-xl text-xs space-y-2">
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span>Unlock Prerequisite</span>
+                    <span className={`font-mono font-medium ${isCampaignUnlocked ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {isCampaignUnlocked ? 'Unlocked' : `${completedPrereqCount} / 17 Realms Completed`}
+                    </span>
+                  </div>
+                  {!isCampaignUnlocked && (
+                    <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden border border-white/5">
+                      <div
+                        className="h-full bg-gradient-to-r from-amber-500 to-indigo-500 transition-all duration-300"
+                        style={{ width: `${Math.round((completedPrereqCount / 17) * 100)}%` }}
+                      />
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span>Boss Health</span>
+                    <span className="font-mono text-amber-300">
+                      {progress.campaignCheckpoint.dragonDefeated
+                        ? '0 (Defeated)'
+                        : `${progress.campaignCheckpoint.bossHealthRemaining} HP`}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-5">
+                {isCampaignUnlocked ? (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onNavigateToCampaign();
+                    }}
+                    className="w-full py-2.5 px-4 bg-amber-600/90 hover:bg-amber-500 text-white rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
+                  >
+                    <Crown className="w-3.5 h-3.5" />
+                    <span>Enter Eternal Kingdom</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onNavigateToMap();
+                    }}
+                    className="w-full py-2.5 px-4 bg-slate-900/60 hover:bg-slate-800/80 border border-slate-700/80 text-slate-300 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                    title="Complete all 17 previous realms to unlock"
+                  >
+                    <Lock className="w-3.5 h-3.5 text-red-400" />
+                    <span>Complete All 17 Realms to Unlock ({17 - completedPrereqCount} Left)</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Card 3: Achievements */}
         <div

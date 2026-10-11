@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 import { Level, UserProgress, ExecutionResult } from '../../types';
 import { JavaEditor } from '../editor/JavaEditor';
 import { runJavaCode, testJavaChallenge } from '../../services/javaRunner';
-import { saveCampaignStage } from '../../services/storage';
+import { saveCampaignStage, isEternalKingdomUnlocked } from '../../services/storage';
 import { ETERNAL_KINGDOM_CAPSTONES } from '../../content/eternalKingdomCapstones';
 import confetti from 'canvas-confetti';
 import bossImgUrl from '../../assets/images/boss_madara_warrior_1791705587513.jpg';
 import { 
   Crown, Play, CheckCircle2, RotateCcw, Shield, Sparkles, 
-  Terminal, ChevronRight, Award, Trophy, AlertTriangle, ShieldCheck, Zap, Code, Copy
+  Terminal, ChevronRight, Award, Trophy, AlertTriangle, ShieldCheck, Zap, Code, Copy,
+  Lock, Map as MapIcon
 } from 'lucide-react';
 
 interface Level13CampaignProps {

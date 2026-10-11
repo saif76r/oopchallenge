@@ -14,7 +14,7 @@ export const INITIAL_USER_PROGRESS: UserProgress = {
   lastActiveDate: new Date().toISOString().split('T')[0],
   completedMissionIds: [],
   completedLevelIds: [],
-  unlockedLevelIds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
+  unlockedLevelIds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17], // Level 18 is strictly LOCKED until all 17 levels are complete
   achievements: [],
   campaignCheckpoint: {
     stage: 1,
@@ -26,17 +26,31 @@ export const INITIAL_USER_PROGRESS: UserProgress = {
   submissionHistory: [],
 };
 
+export function isEternalKingdomUnlocked(progress: UserProgress): boolean {
+  const allPrereqLevels = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+  return allPrereqLevels.every((id) => progress.completedLevelIds.includes(id));
+}
+
 export function getStoredProgress(): UserProgress {
   if (typeof window === 'undefined') return INITIAL_USER_PROGRESS;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return INITIAL_USER_PROGRESS;
     const parsed = JSON.parse(raw);
-    const all18 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
-    const unlockedLevelIds = Array.from(
-      new Set([...(parsed.unlockedLevelIds || []), ...all18])
+    const completedLevelIds: number[] = parsed.completedLevelIds || [];
+    const allPrereqCompleted = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].every((id) =>
+      completedLevelIds.includes(id)
     );
-    return { ...INITIAL_USER_PROGRESS, ...parsed, unlockedLevelIds };
+    
+    // Level 18 is strictly locked unless ALL 17 levels have been completed
+    let unlockedLevelIds: number[] = parsed.unlockedLevelIds || [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+    if (allPrereqCompleted) {
+      unlockedLevelIds = Array.from(new Set([...unlockedLevelIds, 18]));
+    } else {
+      unlockedLevelIds = unlockedLevelIds.filter((id: number) => id !== 18);
+    }
+
+    return { ...INITIAL_USER_PROGRESS, ...parsed, completedLevelIds, unlockedLevelIds };
   } catch {
     return INITIAL_USER_PROGRESS;
   }
@@ -88,11 +102,16 @@ export function recordMissionCompletion(
   if (isLevelCompleted) {
     const nextId = levelId + 1;
     if (nextId <= CURRICULUM.length) {
-      // Level 18 requires Level 17 completion
+      // Level 18 requires ALL 17 levels (Levels 1-17) to be completed
       if (nextId === 18) {
-        if (newCompletedLevels.includes(17)) {
+        const allPrereqCompleted = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].every((id) =>
+          newCompletedLevels.includes(id)
+        );
+        if (allPrereqCompleted) {
           unlocked.add(18);
           nextLevelToUnlock = 18;
+        } else {
+          unlocked.delete(18);
         }
       } else {
         unlocked.add(nextId);

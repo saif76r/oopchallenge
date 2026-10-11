@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Level, UserProgress } from '../../types';
+import { isEternalKingdomUnlocked } from '../../services/storage';
 import { CURRICULUM } from '../../content/curriculum';
 import { 
   Lock, CheckCircle2, Play
@@ -19,6 +20,9 @@ export const AdventureMap: React.FC<AdventureMapProps> = ({
   const [selectedLevel, setSelectedLevel] = useState<Level>(CURRICULUM[0]);
 
   const getStatus = (level: Level) => {
+    if (level.id === 18 && !isEternalKingdomUnlocked(progress)) {
+      return 'LOCKED';
+    }
     const isUnlocked = progress.unlockedLevelIds.includes(level.id);
     const isCompleted = progress.completedLevelIds.includes(level.id);
     const completedCount = level.missions.filter((m) => progress.completedMissionIds.includes(m.id)).length;
@@ -93,7 +97,10 @@ export const AdventureMap: React.FC<AdventureMapProps> = ({
                           Done
                         </span>
                       ) : status === 'LOCKED' ? (
-                        <span className="text-xs text-slate-500">Locked</span>
+                        <span className="inline-flex items-center gap-1 text-xs text-red-400 font-mono">
+                          <Lock className="w-3 h-3 text-red-400" />
+                          {isLevel13 ? 'Sealed' : 'Locked'}
+                        </span>
                       ) : (
                         <span className="text-xs font-mono text-indigo-400">
                           {completedCount}/{totalMissions}
@@ -210,11 +217,18 @@ export const AdventureMap: React.FC<AdventureMapProps> = ({
           {/* Action CTA */}
           <div className="pt-2">
             {getStatus(selectedLevel) === 'LOCKED' ? (
-              <div className="p-3 bg-red-950/30 border border-red-900/50 rounded-lg text-xs text-red-300 flex items-center gap-2">
-                <Lock className="w-4 h-4 text-red-400 shrink-0" />
-                <span>
-                  Prerequisite incomplete: Clear Level {selectedLevel.id - 1} to unlock this realm.
-                </span>
+              <div className="p-3.5 bg-red-950/30 border border-red-900/50 rounded-lg text-xs text-red-300 flex items-start gap-2.5">
+                <Lock className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <span className="font-semibold block text-red-200">
+                    {selectedLevel.id === 18 ? 'The Eternal Kingdom is Sealed' : 'Prerequisite Incomplete'}
+                  </span>
+                  <span className="text-slate-300 block leading-relaxed">
+                    {selectedLevel.id === 18
+                      ? `Complete all 17 realms in Olympia to shatter the Cosmic Barrier and unlock the final campaign (${progress.completedLevelIds.filter((id) => id < 18).length} / 17 Completed).`
+                      : `Clear Level ${selectedLevel.id - 1} to unlock this realm.`}
+                  </span>
+                </div>
               </div>
             ) : (
               <button

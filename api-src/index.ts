@@ -62,7 +62,21 @@ async function runJavaWithGeminiFallback(code: string, startTime: number) {
     };
   }
 
-  // 2. If AST reported a compilation error, try Gemini if key exists
+  // 2. Return immediate compiler diagnostics for syntax/structural errors
+  if (
+    astResult.compilationError &&
+    (astResult.compilationError.includes('curly braces') ||
+      astResult.compilationError.includes('Main method not found') ||
+      astResult.compilationError.includes('Syntax error') ||
+      astResult.compilationError.includes('reached end of file'))
+  ) {
+    return {
+      ...astResult,
+      executionTimeMs: Date.now() - startTime,
+    };
+  }
+
+  // 3. If AST reported a complex symbol error, try Gemini if key exists
   const apiKey = process.env.GEMINI_API_KEY;
   if (apiKey) {
     const ai = new GoogleGenAI({

@@ -16,18 +16,35 @@ function evaluateJavaLocally(code: string): ExecutionResult {
 }
 
 export async function runJavaCode(code: string, stdin: string = ''): Promise<ExecutionResult> {
-  // Execute immediately using the built-in Java AST engine (< 10ms)
+  // 1. Execute immediately using the built-in Java AST engine (< 20ms)
   const localRes = evaluateJavaLocally(code);
   if (localRes.success || localRes.runtimeError) {
     return localRes;
   }
 
+  // 2. Return immediate compiler diagnostics if it's a clear syntax or symbol error
+  if (
+    localRes.compilationError &&
+    (localRes.compilationError.includes('curly braces') ||
+      localRes.compilationError.includes('Main method not found') ||
+      localRes.compilationError.includes('Syntax error') ||
+      localRes.compilationError.includes('reached end of file'))
+  ) {
+    return localRes;
+  }
+
+  // 3. Optional quick server fallback with strict 2.5s timeout
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2500);
+
     const response = await fetch('/api/java/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, stdin }),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       return localRes;
@@ -36,11 +53,11 @@ export async function runJavaCode(code: string, stdin: string = ''): Promise<Exe
     const data = await response.json();
     return {
       success: data.success,
-      compilationError: data.compilationError,
-      runtimeError: data.runtimeError,
+      compilationError: data.compilationError || undefined,
+      runtimeError: data.runtimeError || undefined,
       stdout: data.stdout || '',
       stderr: data.stderr || '',
-      executionTimeMs: data.executionTimeMs || 0,
+      executionTimeMs: data.executionTimeMs || localRes.executionTimeMs,
       testResults: [],
       allTestsPassed: false,
     };
@@ -54,16 +71,29 @@ export async function testJavaChallenge(
   testCases: TestCase[],
   missionId: string
 ): Promise<ExecutionResult> {
-  // Run fast local Java AST engine first (< 10ms)
+  // Run fast local Java AST engine first (< 20ms)
   let localExec = evaluateJavaLocally(code);
 
   if (localExec.compilationError) {
+    if (
+      localExec.compilationError.includes('curly braces') ||
+      localExec.compilationError.includes('Main method not found') ||
+      localExec.compilationError.includes('Syntax error')
+    ) {
+      return localExec;
+    }
+
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
+
       const response = await fetch('/api/java/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, testCases, missionId }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       if (response.ok) {
         return await response.json();

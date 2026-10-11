@@ -40,41 +40,7 @@ async function executeJavaWithFallback(code: string, tempDir: string | null, sta
   stderr: string;
   executionTimeMs: number;
 }> {
-  if (!process.env.VERCEL && tempDir && code.includes('class Main')) {
-    const mainJavaPath = path.join(tempDir, 'Main.java');
-    fs.writeFileSync(mainJavaPath, code, 'utf-8');
-
-    const compileResult = await runExec('javac Main.java', tempDir, 8000);
-    const isJavacMissing =
-      compileResult.code === 127 ||
-      compileResult.stderr.includes('javac: not found') ||
-      compileResult.stderr.includes('command not found');
-
-    if (!isJavacMissing) {
-      if (compileResult.code !== 0) {
-        return {
-          success: false,
-          compilationError: compileResult.stderr || compileResult.stdout || 'Compilation failed',
-          runtimeError: null,
-          stdout: '',
-          stderr: compileResult.stderr,
-          executionTimeMs: Date.now() - startTime,
-        };
-      }
-
-      const execResult = await runExec('java -Xmx128m -Xss1m Main', tempDir, 5000);
-      return {
-        success: execResult.code === 0,
-        compilationError: null,
-        runtimeError: execResult.code !== 0 ? (execResult.stderr || 'Execution terminated with error') : null,
-        stdout: execResult.stdout,
-        stderr: execResult.stderr,
-        executionTimeMs: Date.now() - startTime,
-      };
-    }
-  }
-
-  // Check balanced braces
+  // 1. Fast brace balance check
   let braceDepth = 0;
   for (const ch of code) {
     if (ch === '{') braceDepth++;
@@ -91,9 +57,23 @@ async function executeJavaWithFallback(code: string, tempDir: string | null, sta
     };
   }
 
-  // Run real Java OOP AST Interpreter first for fast, deterministic execution
+  // 2. Run instant in-memory Java OOP AST Interpreter first (< 15ms)
   const astResult = executeJavaAST(code);
   if (astResult.success || astResult.runtimeError) {
+    return {
+      ...astResult,
+      executionTimeMs: Date.now() - startTime,
+    };
+  }
+
+  // 3. Return immediate compiler diagnostics for syntax/structure errors
+  if (
+    astResult.compilationError &&
+    (astResult.compilationError.includes('curly braces') ||
+      astResult.compilationError.includes('Main method not found') ||
+      astResult.compilationError.includes('Syntax error') ||
+      astResult.compilationError.includes('reached end of file'))
+  ) {
     return {
       ...astResult,
       executionTimeMs: Date.now() - startTime,

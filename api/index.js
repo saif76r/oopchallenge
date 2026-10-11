@@ -2372,6 +2372,12 @@ async function runJavaWithGeminiFallback(code, startTime) {
       executionTimeMs: Date.now() - startTime
     };
   }
+  if (astResult.compilationError && (astResult.compilationError.includes("curly braces") || astResult.compilationError.includes("Main method not found") || astResult.compilationError.includes("Syntax error") || astResult.compilationError.includes("reached end of file"))) {
+    return {
+      ...astResult,
+      executionTimeMs: Date.now() - startTime
+    };
+  }
   const apiKey = process.env.GEMINI_API_KEY;
   if (apiKey) {
     const ai = new GoogleGenAI({

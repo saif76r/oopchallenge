@@ -21,6 +21,7 @@ import { DungeonEscape } from './components/modes/DungeonEscape';
 import { AITutorModal } from './components/tutor/AITutorModal';
 import { ProfileModal } from './components/profile/ProfileModal';
 import bgVideoUrl from './video/video.mp4';
+import heroBgUrl from './assets/images/hero_fantasy_realm_1791652001782.jpg';
 import { Trophy, X } from 'lucide-react';
 
 export default function App() {
@@ -130,11 +131,12 @@ export default function App() {
       <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden">
         <video
           src={bgVideoUrl}
+          poster={heroBgUrl}
           autoPlay
           loop
           muted
           playsInline
-          className="w-full h-full object-cover opacity-80"
+          className="w-full h-full object-cover opacity-[0.88]"
         />
         <div className="absolute inset-0 bg-[#070913]/30" />
       </div>

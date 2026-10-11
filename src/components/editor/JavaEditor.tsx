@@ -53,12 +53,12 @@ export const JavaEditor: React.FC<JavaEditorProps> = ({
   };
 
   return (
-    <div className="relative w-full h-full min-h-[380px] bg-[#080b14]/55 backdrop-blur-md border border-slate-800/80 rounded-lg overflow-hidden flex font-mono text-xs md:text-sm shadow-inner">
+    <div className="relative w-full h-full min-h-[380px] bg-[#080b14]/30 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden flex font-mono text-xs md:text-sm shadow-2xl">
       {/* Line Numbers Gutter */}
       <div
         ref={lineNumbersRef}
         aria-hidden="true"
-        className="min-w-[3.25rem] py-3 bg-[#05070d]/45 text-slate-500 select-none text-right pr-3 overflow-hidden border-r border-slate-800/70 leading-6 font-mono text-xs shrink-0"
+        className="min-w-[3.25rem] py-3 bg-black/25 text-slate-400 select-none text-right pr-3 overflow-hidden border-r border-white/10 leading-6 font-mono text-xs shrink-0 backdrop-blur-md"
       >
         {Array.from({ length: lineCount }).map((_, i) => (
           <div key={i} className="h-6">

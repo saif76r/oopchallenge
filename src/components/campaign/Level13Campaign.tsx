@@ -5,6 +5,7 @@ import { runJavaCode, testJavaChallenge } from '../../services/javaRunner';
 import { saveCampaignStage } from '../../services/storage';
 import { ETERNAL_KINGDOM_CAPSTONES } from '../../content/eternalKingdomCapstones';
 import confetti from 'canvas-confetti';
+import bossImgUrl from '../../assets/images/boss_madara_warrior_1791705587513.jpg';
 import { 
   Crown, Play, CheckCircle2, RotateCcw, Shield, Sparkles, 
   Terminal, ChevronRight, Award, Trophy, AlertTriangle, ShieldCheck, Zap, Code, Copy
@@ -137,8 +138,10 @@ export const Level13Campaign: React.FC<Level13CampaignProps> = ({
               testCaseId: 'output_match',
               description: `Output Verification: Matches Expected Output for ${activeSpec.title}`,
               passed: true,
-              actualOutput: actualOut,
-              expectedOutput: expectedOut,
+              input: '',
+              expected: expectedOut,
+              actual: actualOut,
+              isHidden: false,
             },
           ]
         : [
@@ -146,36 +149,46 @@ export const Level13Campaign: React.FC<Level13CampaignProps> = ({
               testCaseId: 'output_match',
               description: 'Console Output Match (or implement all OOP concepts below with custom output)',
               passed: outputMatchesExactly || allOopPillarsPresent,
-              actualOutput: actualOut,
-              expectedOutput: expectedOut,
+              input: '',
+              expected: expectedOut,
+              actual: actualOut,
+              isHidden: false,
             },
             {
               testCaseId: 'oop_encapsulation',
               description: 'Encapsulation: Private fields & protected data access',
               passed: hasEncapsulation,
-              actualOutput: hasEncapsulation ? 'Verified' : 'Missing private fields',
-              expectedOutput: 'Verified',
+              input: '',
+              expected: 'Verified',
+              actual: hasEncapsulation ? 'Verified' : 'Missing private fields',
+              isHidden: false,
             },
             {
               testCaseId: 'oop_inheritance',
               description: 'Abstract Class, Inheritance & Method Overriding (abstract class + extends)',
               passed: hasAbstractAndInheritance,
-              actualOutput: hasAbstractAndInheritance ? 'Verified' : 'Missing abstract class or extends',
-              expectedOutput: 'Verified',
+              input: '',
+              expected: 'Verified',
+              actual: hasAbstractAndInheritance ? 'Verified' : 'Missing abstract class or extends',
+              isHidden: false,
             },
             {
               testCaseId: 'oop_interface',
               description: 'Interface & Polymorphism (interface + implements)',
               passed: hasInterface,
-              actualOutput: hasInterface ? 'Verified' : 'Missing interface or implements',
-              expectedOutput: 'Verified',
+              input: '',
+              expected: 'Verified',
+              actual: hasInterface ? 'Verified' : 'Missing interface or implements',
+              isHidden: false,
             },
             {
               testCaseId: 'oop_exceptions',
               description: 'Custom Exceptions & Exception Handling (extends Exception, throw, try-catch)',
               passed: hasExceptionHandling,
-              actualOutput: hasExceptionHandling ? 'Verified' : 'Missing custom exception or try-catch',
-              expectedOutput: 'Verified',
+              input: '',
+              expected: 'Verified',
+              actual: hasExceptionHandling ? 'Verified' : 'Missing custom exception or try-catch',
+              isHidden: false,
             },
           ];
 
@@ -220,7 +233,7 @@ export const Level13Campaign: React.FC<Level13CampaignProps> = ({
   return (
     <div className="w-full max-w-7xl mx-auto py-8 px-4 md:px-8">
       {/* Campaign Banner Header */}
-      <div className="relative rounded-2xl border border-amber-600/40 bg-gradient-to-r from-[#0d091a] via-[#140e29] to-[#0d091a] p-6 md:p-8 mb-8 overflow-hidden shadow-2xl">
+      <div className="relative rounded-2xl border border-amber-500/30 bg-gradient-to-r from-[#0d091a]/35 via-[#140e29]/30 to-[#0d091a]/35 backdrop-blur-xl p-6 md:p-8 mb-8 overflow-hidden shadow-2xl">
         <div className="relative z-10 grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
           <div className="md:col-span-8 space-y-3">
             <div className="flex items-center gap-2 text-xs font-mono text-amber-400">
@@ -246,7 +259,7 @@ export const Level13Campaign: React.FC<Level13CampaignProps> = ({
                   {bossHp} / 1500 HP {bossHp <= 1000 && bossHp > 0 && '(Cosmic Barrier Active)'}
                 </span>
               </div>
-              <div className="w-full bg-slate-950 rounded-full h-2.5 overflow-hidden border border-slate-800">
+              <div className="w-full bg-slate-950/60 rounded-full h-2.5 overflow-hidden border border-white/10 backdrop-blur-sm">
                 <div
                   className={`h-full transition-all duration-500 ${
                     isDragonDefeated ? 'bg-emerald-500' : 'bg-gradient-to-r from-purple-600 to-indigo-500'
@@ -259,10 +272,10 @@ export const Level13Campaign: React.FC<Level13CampaignProps> = ({
 
           {/* Boss Portrait Image Generated for the Platform */}
           <div className="md:col-span-4 flex justify-center">
-            <div className="relative w-40 h-40 md:w-48 md:h-48 rounded-xl overflow-hidden border-2 border-indigo-500/50 shadow-xl shadow-purple-950/60 bg-slate-950">
+            <div className="relative w-40 h-40 md:w-48 md:h-48 rounded-xl overflow-hidden border-2 border-red-500/50 shadow-xl shadow-red-950/60 bg-slate-950/40 backdrop-blur-md">
               <img
-                src="/src/assets/images/boss_eclipse_dragon_1791652017510.jpg"
-                alt="The Eclipse Dragon Boss"
+                src={bossImgUrl}
+                alt="The Eclipse Boss"
                 referrerPolicy="no-referrer"
                 className="w-full h-full object-cover transition-transform duration-700 hover:scale-105"
               />
@@ -286,12 +299,12 @@ export const Level13Campaign: React.FC<Level13CampaignProps> = ({
             <button
               key={s.num}
               onClick={() => handleStageSelect(s.num)}
-              className={`p-3 rounded-lg border text-left transition-all cursor-pointer ${
+              className={`p-3 rounded-xl border text-left transition-all cursor-pointer backdrop-blur-lg ${
                 isCurrent
-                  ? 'bg-indigo-950/70 border-indigo-500 ring-1 ring-indigo-500/50'
+                  ? 'bg-indigo-950/45 border-indigo-400/80 ring-1 ring-indigo-400/50 shadow-lg shadow-indigo-950/30'
                   : isDone
-                  ? 'bg-[#0b0e1b] border-emerald-800/60 hover:border-emerald-700'
-                  : 'bg-[#080b14] border-slate-800/80 hover:border-slate-700'
+                  ? 'bg-[#0b0e1b]/30 border-emerald-500/30 hover:border-emerald-400/50 hover:bg-[#0b0e1b]/45'
+                  : 'bg-[#080b14]/25 border-white/10 hover:border-white/20 hover:bg-[#080b14]/40'
               }`}
             >
               <div className="flex items-center justify-between text-xs mb-1">
@@ -312,10 +325,10 @@ export const Level13Campaign: React.FC<Level13CampaignProps> = ({
       {/* Campaign Coding Workspace */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left: Stage Objective */}
-        <div className="lg:col-span-5 bg-[#0b0e1b]/55 backdrop-blur-md border border-slate-800/80 rounded-xl p-5 md:p-6 flex flex-col justify-between max-h-[calc(100vh-90px)] overflow-y-auto sticky top-20">
+        <div className="lg:col-span-5 bg-[#0b0e1b]/30 backdrop-blur-xl border border-white/10 rounded-2xl p-5 md:p-6 flex flex-col justify-between max-h-[calc(100vh-90px)] overflow-y-auto sticky top-20 shadow-2xl">
           <div className="space-y-5">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-mono font-semibold text-amber-400 uppercase tracking-wider px-2.5 py-1 rounded-md bg-amber-950/50 border border-amber-800/60">
+              <span className="text-xs font-mono font-semibold text-amber-400 uppercase tracking-wider px-2.5 py-1 rounded-md bg-amber-950/30 border border-amber-500/40 backdrop-blur-sm">
                 Project {currentStage} · {activeSpec.lineCountBadge}
               </span>
               <span className="text-xs font-mono text-indigo-300 font-semibold">+500 XP</span>
@@ -336,7 +349,7 @@ export const Level13Campaign: React.FC<Level13CampaignProps> = ({
             </div>
 
             {/* Mandatory Rejection Rules */}
-            <div className="p-4 rounded-xl bg-amber-950/25 border border-amber-800/50 space-y-2">
+            <div className="p-4 rounded-xl bg-amber-950/20 backdrop-blur-md border border-amber-500/30 space-y-2">
               <span className="text-xs font-semibold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
                 <span>Rejection Conditions</span>
@@ -357,8 +370,8 @@ export const Level13Campaign: React.FC<Level13CampaignProps> = ({
               </span>
               <div className="space-y-2.5">
                 {activeSpec.tasks.map((t, idx) => (
-                  <div key={idx} className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800 text-xs md:text-[13.5px] text-slate-200 flex items-start gap-3">
-                    <span className="w-5 h-5 rounded-md bg-slate-800 text-slate-300 border border-slate-700 flex items-center justify-center shrink-0 text-[11px] font-mono font-semibold mt-0.5">
+                  <div key={idx} className="p-3.5 rounded-xl bg-slate-900/35 backdrop-blur-md border border-white/10 text-xs md:text-[13.5px] text-slate-200 flex items-start gap-3">
+                    <span className="w-5 h-5 rounded-md bg-slate-800/80 text-slate-300 border border-white/15 flex items-center justify-center shrink-0 text-[11px] font-mono font-semibold mt-0.5">
                       {idx + 1}
                     </span>
                     <span className="leading-relaxed tracking-[0.01em] break-words">{t}</span>
@@ -410,7 +423,7 @@ export const Level13Campaign: React.FC<Level13CampaignProps> = ({
         <div className="lg:col-span-7 flex flex-col space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
             <div className="flex items-center gap-2 text-xs text-slate-300 font-mono">
-              <span className="px-2.5 py-1 rounded bg-slate-900 border border-slate-700 text-white font-medium">
+              <span className="px-2.5 py-1 rounded-md bg-slate-900/40 border border-white/15 text-white font-medium backdrop-blur-sm">
                 Main.java
               </span>
             </div>
@@ -420,7 +433,7 @@ export const Level13Campaign: React.FC<Level13CampaignProps> = ({
                   setCode(activeSpec.skeletonCode);
                   setExecResult(null);
                 }}
-                className="px-2.5 py-1.5 text-xs text-slate-300 hover:text-white bg-slate-900 border border-slate-800 rounded transition-colors flex items-center gap-1 cursor-pointer"
+                className="px-2.5 py-1.5 text-xs text-slate-300 hover:text-white bg-slate-900/40 hover:bg-slate-800/60 border border-white/15 backdrop-blur-sm rounded-md transition-colors flex items-center gap-1 cursor-pointer"
                 title="Reset editor to clean starter template"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
@@ -429,7 +442,7 @@ export const Level13Campaign: React.FC<Level13CampaignProps> = ({
               <button
                 onClick={handleRun}
                 disabled={isRunning || isVerifying}
-                className="px-3 py-1.5 text-xs text-slate-200 bg-slate-800 hover:bg-slate-700 rounded transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                className="px-3 py-1.5 text-xs text-slate-200 bg-slate-800/50 hover:bg-slate-700/60 border border-white/15 backdrop-blur-sm rounded-md transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
               >
                 <Play className="w-3 h-3 fill-current text-indigo-400" />
                 <span>{isRunning ? 'Running...' : 'Run Code'}</span>
@@ -437,7 +450,7 @@ export const Level13Campaign: React.FC<Level13CampaignProps> = ({
               <button
                 onClick={handleVerifyStage}
                 disabled={isRunning || isVerifying}
-                className="px-4 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-500 rounded transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                className="px-4 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-500 rounded-md shadow-lg shadow-indigo-950/40 transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
               >
                 <CheckCircle2 className="w-3.5 h-3.5" />
                 <span>{isVerifying ? 'Verifying...' : `Verify Project ${currentStage}`}</span>
@@ -450,8 +463,8 @@ export const Level13Campaign: React.FC<Level13CampaignProps> = ({
           </div>
 
           {/* Execution Results View */}
-          <div className="bg-[#0b0e1b]/55 backdrop-blur-md border border-slate-800/80 rounded-lg p-3 font-mono text-xs min-h-[160px] overflow-y-auto">
-            <div className="text-slate-500 text-[11px] mb-2 font-mono flex items-center justify-between">
+          <div className="bg-[#0b0e1b]/30 backdrop-blur-xl border border-white/10 rounded-xl p-3.5 font-mono text-xs min-h-[160px] overflow-y-auto shadow-xl">
+            <div className="text-slate-400 text-[11px] mb-2 font-mono flex items-center justify-between">
               <span>Execution Output & Test Diagnostics</span>
               {execResult?.executionTimeMs !== undefined && (
                 <span>{execResult.executionTimeMs}ms</span>

@@ -1542,6 +1542,9 @@ export function executeJavaAST(code: string): JavaRunOutput {
     }
 
     const { decl, ownerClass } = found;
+    if (!decl.body) {
+      throw new Error(`Main.java: error: cannot find implementation for method ${methodName} in class ${className}`);
+    }
     const methodScope = new Scope();
     for (let i = 0; i < decl.params.length; i++) {
       methodScope.declare(decl.params[i].name, coerceToType(args[i], decl.params[i].type));

@@ -314,7 +314,7 @@ export const CodingArena: React.FC<CodingArenaProps> = ({
         {/* ========================================================= */}
         {/* LEFT PANEL: BRIEF TASKS SIDEBAR (Width 5 cols on lg)      */}
         {/* ========================================================= */}
-        <div className="lg:col-span-5 bg-[#0b0e1b]/55 backdrop-blur-md border border-slate-800/80 rounded-xl overflow-hidden shadow-xl flex flex-col space-y-5 p-5 md:p-6 sticky top-20 max-h-[calc(100vh-100px)] overflow-y-auto">
+        <div className="lg:col-span-5 bg-[#0b0e1b]/30 backdrop-blur-xl border border-white/10 rounded-2xl overflow-hidden shadow-2xl flex flex-col space-y-5 p-5 md:p-6 sticky top-20 max-h-[calc(100vh-100px)] overflow-y-auto">
           
           {/* Mission Stepper Tabs */}
           <div className="space-y-2.5">
@@ -330,7 +330,7 @@ export const CodingArena: React.FC<CodingArenaProps> = ({
             </div>
 
             {/* Stepper Buttons */}
-            <div className="flex flex-wrap gap-2 p-2 bg-slate-950/45 rounded-xl border border-slate-800/70">
+            <div className="flex flex-wrap gap-2 p-2 bg-slate-950/35 backdrop-blur-md rounded-xl border border-white/10">
               {level.missions.map((m, idx) => {
                 const isSelected = !isBossMode && activeMission?.id === m.id;
                 const isDone = progress.completedMissionIds.includes(m.id);
@@ -680,9 +680,9 @@ export const CodingArena: React.FC<CodingArenaProps> = ({
           )}
 
           {/* Bottom Execution Console & Test Output */}
-          <div className="bg-[#0b0e1b]/55 backdrop-blur-md border border-slate-800/80 rounded-lg overflow-hidden flex flex-col min-h-[220px]">
+          <div className="bg-[#0b0e1b]/30 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden flex flex-col min-h-[220px] shadow-xl">
             {/* Console Tabs */}
-            <div className="flex items-center justify-between bg-[#080b14]/50 border-b border-slate-800/80 px-3 py-1.5 text-xs">
+            <div className="flex items-center justify-between bg-black/25 backdrop-blur-md border-b border-white/10 px-3 py-1.5 text-xs">
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setActiveConsoleTab('console')}

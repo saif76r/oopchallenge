@@ -50,7 +50,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   return (
     <div className="w-full max-w-7xl mx-auto py-8 px-4 md:px-8 space-y-8">
       {/* Hero Welcome Banner */}
-      <div className="relative rounded-2xl border border-slate-700/70 bg-[#090c16]/45 backdrop-blur-xs overflow-hidden shadow-2xl">
+      <div className="relative rounded-2xl border border-white/10 bg-[#090c16]/30 backdrop-blur-xl overflow-hidden shadow-2xl">
         <div className="absolute inset-0 z-0">
           <video
             src={bgVideoUrl}
@@ -59,9 +59,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
             loop
             muted
             playsInline
-            className="w-full h-full object-cover opacity-75"
+            className="w-full h-full object-cover opacity-[0.88]"
           />
-          <div className="absolute inset-0 bg-gradient-to-t md:bg-gradient-to-r from-[#070913]/75 via-[#070913]/40 to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-t md:bg-gradient-to-r from-[#070913]/70 via-[#070913]/35 to-transparent" />
         </div>
 
         <div className="relative z-10 p-6 md:p-10 grid grid-cols-1 md:grid-cols-12 gap-8 items-center">
@@ -85,7 +85,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
               <button
                 onClick={onNavigateToMap}
-                className="py-2.5 px-4 bg-slate-900/65 hover:bg-slate-800/80 backdrop-blur-sm border border-slate-700/80 text-slate-200 rounded-lg font-medium text-xs md:text-sm transition-colors flex items-center gap-2 cursor-pointer"
+                className="py-2.5 px-4 bg-slate-900/40 hover:bg-slate-800/60 backdrop-blur-md border border-white/15 text-slate-200 rounded-lg font-medium text-xs md:text-sm transition-colors flex items-center gap-2 cursor-pointer"
               >
                 <Map className="w-4 h-4 text-indigo-400" />
                 <span>Explore All {CURRICULUM.length} Realms</span>
@@ -94,7 +94,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
 
           {/* Player Quick Profile Card */}
-          <div className="md:col-span-4 bg-[#0b0e1b]/60 backdrop-blur-md border border-slate-700/70 p-5 rounded-xl space-y-4">
+          <div className="md:col-span-4 bg-[#0b0e1b]/35 backdrop-blur-xl border border-white/15 p-5 rounded-2xl space-y-4 shadow-xl">
             <div className="flex items-center gap-3.5">
               <div className="relative w-12 h-12 rounded-lg overflow-hidden border border-indigo-500/60 shrink-0">
                 <img
@@ -151,7 +151,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         {/* Card 1: Adventure Map & Practice Arena */}
         <div
           onClick={onNavigateToMap}
-          className="group bg-[#0b0e1b]/60 backdrop-blur-md border border-slate-800/80 hover:border-indigo-500/70 rounded-xl p-6 flex flex-col justify-between transition-all cursor-pointer shadow-lg hover:shadow-indigo-950/30"
+          className="group bg-[#0b0e1b]/30 backdrop-blur-xl border border-white/10 hover:border-indigo-400/60 rounded-2xl p-6 flex flex-col justify-between transition-all cursor-pointer shadow-xl hover:shadow-indigo-950/30"
         >
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -174,7 +174,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
 
             {/* Quick Level Preview List */}
-            <div className="p-3 bg-slate-950/55 border border-slate-800/70 rounded-lg space-y-2">
+            <div className="p-3 bg-slate-950/40 backdrop-blur-md border border-white/10 rounded-xl space-y-2">
               <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
                 <span>ACTIVE LEVEL</span>
                 <span className="text-indigo-400">{completedMissionsCount} Missions Done</span>
@@ -194,7 +194,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 e.stopPropagation();
                 onNavigateToMap();
               }}
-              className="flex-1 py-2.5 px-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+              className="flex-1 py-2.5 px-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
             >
               <Map className="w-3.5 h-3.5" />
               <span>View Levels</span>
@@ -204,7 +204,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 e.stopPropagation();
                 onSelectLevel(nextLevel);
               }}
-              className="py-2.5 px-3 bg-slate-900/70 hover:bg-slate-800 border border-slate-700 text-slate-200 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+              className="py-2.5 px-3 bg-slate-900/40 hover:bg-slate-800/60 border border-white/15 backdrop-blur-md text-slate-200 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <Terminal className="w-3.5 h-3.5 text-indigo-400" />
               <span>Practice</span>
@@ -215,7 +215,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         {/* Card 2: Eternal Kingdom (Final Campaign) */}
         <div
           onClick={onNavigateToCampaign}
-          className="group bg-gradient-to-b from-[#140e29]/65 to-[#0b0e1b]/60 backdrop-blur-md border border-amber-600/30 hover:border-amber-500/70 rounded-xl p-6 flex flex-col justify-between transition-all cursor-pointer shadow-lg hover:shadow-amber-950/20"
+          className="group bg-gradient-to-b from-[#140e29]/40 to-[#0b0e1b]/30 backdrop-blur-xl border border-amber-500/30 hover:border-amber-400/60 rounded-2xl p-6 flex flex-col justify-between transition-all cursor-pointer shadow-xl hover:shadow-amber-950/20"
         >
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -235,7 +235,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </p>
             </div>
 
-            <div className="p-3 bg-slate-950/55 border border-slate-800/70 rounded-lg text-xs space-y-1.5">
+            <div className="p-3 bg-slate-950/40 backdrop-blur-md border border-white/10 rounded-xl text-xs space-y-1.5">
               <div className="flex items-center justify-between text-slate-400">
                 <span>Status</span>
                 <span className="text-indigo-400 font-medium">
@@ -259,7 +259,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 e.stopPropagation();
                 onNavigateToCampaign();
               }}
-              className="w-full py-2.5 px-4 bg-amber-600/90 hover:bg-amber-500 text-white rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+              className="w-full py-2.5 px-4 bg-amber-600/90 hover:bg-amber-500 text-white rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
             >
               <Crown className="w-3.5 h-3.5" />
               <span>Enter Eternal Kingdom</span>
@@ -270,7 +270,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         {/* Card 3: Achievements */}
         <div
           onClick={onNavigateToAchievements}
-          className="group bg-[#0b0e1b]/60 backdrop-blur-md border border-slate-800/80 hover:border-emerald-500/60 rounded-xl p-6 flex flex-col justify-between transition-all cursor-pointer shadow-lg hover:shadow-emerald-950/20"
+          className="group bg-[#0b0e1b]/30 backdrop-blur-xl border border-white/10 hover:border-emerald-400/60 rounded-2xl p-6 flex flex-col justify-between transition-all cursor-pointer shadow-xl hover:shadow-emerald-950/20"
         >
           <div className="space-y-4">
             <div className="flex items-center justify-between">

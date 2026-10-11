@@ -18,7 +18,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenTutor,
 }) => {
   return (
-    <header className="sticky top-0 z-40 w-full bg-[#070913]/65 backdrop-blur-md border-b border-slate-800/70 px-4 md:px-8 py-3.5">
+    <header className="sticky top-0 z-40 w-full bg-[#070913]/35 backdrop-blur-xl border-b border-white/10 px-4 md:px-8 py-3.5 shadow-lg">
       <div className="max-w-7xl mx-auto flex items-center justify-between gap-8">
         {/* Zone 1: Brand Wordmark (Single text element, whitespace-nowrap shrink-0) */}
         <button
@@ -36,7 +36,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {activeTab !== 'dashboard' && (
             <button
               onClick={() => onNavigate('dashboard')}
-              className="px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-900 border border-slate-700/80 rounded-md hover:bg-slate-800 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-900/40 border border-white/15 backdrop-blur-md rounded-md hover:bg-slate-800/60 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               Home
             </button>
@@ -45,7 +45,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* Player badge / Profile button */}
           <button
             onClick={onOpenProfile}
-            className="flex items-center gap-2.5 px-3 py-1.5 bg-slate-900/90 border border-slate-700/80 rounded-md hover:border-indigo-500/80 transition-colors whitespace-nowrap shrink-0 cursor-pointer text-left"
+            className="flex items-center gap-2.5 px-3 py-1.5 bg-slate-900/40 border border-white/15 backdrop-blur-md rounded-md hover:border-indigo-400/80 transition-colors whitespace-nowrap shrink-0 cursor-pointer text-left"
           >
             <div className="w-6 h-6 rounded-sm bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold">
               {progress.displayName.charAt(0).toUpperCase()}

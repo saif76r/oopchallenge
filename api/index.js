@@ -1,0 +1,2505 @@
+// api-src/index.ts
+import { GoogleGenAI } from "@google/genai";
+
+// src/services/javaInterpreter.ts
+var ReturnSignal = class {
+  constructor(value) {
+    this.value = value;
+  }
+};
+var BreakSignal = class {
+};
+var ContinueSignal = class {
+};
+var JavaExceptionSignal = class {
+  constructor(exceptionObj, message, exceptionType) {
+    this.exceptionObj = exceptionObj;
+    this.message = message;
+    this.exceptionType = exceptionType;
+  }
+};
+function tokenize(code) {
+  const tokens = [];
+  let i = 0;
+  let line = 1;
+  const multiCharOps = [
+    ">>>=",
+    "<<=",
+    ">>=",
+    ">>>",
+    "==",
+    "!=",
+    "<=",
+    ">=",
+    "&&",
+    "||",
+    "++",
+    "--",
+    "+=",
+    "-=",
+    "*=",
+    "/=",
+    "%=",
+    "&=",
+    "|=",
+    "^=",
+    "<<",
+    ">>",
+    "->"
+  ];
+  while (i < code.length) {
+    const ch = code[i];
+    if (ch === "\n") {
+      line++;
+      i++;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      i++;
+      continue;
+    }
+    if (ch === "/" && code[i + 1] === "/") {
+      i += 2;
+      while (i < code.length && code[i] !== "\n") i++;
+      continue;
+    }
+    if (ch === "/" && code[i + 1] === "*") {
+      i += 2;
+      while (i < code.length && !(code[i] === "*" && code[i + 1] === "/")) {
+        if (code[i] === "\n") line++;
+        i++;
+      }
+      i += 2;
+      continue;
+    }
+    if (ch === "@") {
+      i++;
+      while (i < code.length && /[A-Za-z0-9_]/.test(code[i])) i++;
+      continue;
+    }
+    if (ch === '"') {
+      let str = "";
+      i++;
+      while (i < code.length && code[i] !== '"') {
+        if (code[i] === "\\") {
+          i++;
+          const esc = code[i];
+          if (esc === "n") str += "\n";
+          else if (esc === "t") str += "	";
+          else if (esc === "r") str += "\r";
+          else if (esc === '"') str += '"';
+          else if (esc === "\\") str += "\\";
+          else str += esc;
+        } else {
+          if (code[i] === "\n") line++;
+          str += code[i];
+        }
+        i++;
+      }
+      if (i >= code.length) {
+        throw new Error(`Main.java:${line}: error: unclosed string literal`);
+      }
+      i++;
+      tokens.push({ type: "string", value: str, line });
+      continue;
+    }
+    if (ch === "'") {
+      let str = "";
+      i++;
+      while (i < code.length && code[i] !== "'") {
+        if (code[i] === "\\") {
+          i++;
+          const esc = code[i];
+          if (esc === "n") str += "\n";
+          else if (esc === "t") str += "	";
+          else str += esc;
+        } else {
+          str += code[i];
+        }
+        i++;
+      }
+      i++;
+      tokens.push({ type: "char", value: str, line });
+      continue;
+    }
+    if (/[0-9]/.test(ch) || ch === "." && /[0-9]/.test(code[i + 1] || "")) {
+      let numStr = "";
+      let isDouble = false;
+      while (i < code.length && /[0-9._]/.test(code[i])) {
+        if (code[i] === ".") isDouble = true;
+        if (code[i] !== "_") numStr += code[i];
+        i++;
+      }
+      if (i < code.length && /[fFdDlL]/.test(code[i])) {
+        const suffix = code[i].toLowerCase();
+        if (suffix === "f" || suffix === "d") isDouble = true;
+        i++;
+      }
+      tokens.push({
+        type: "number",
+        value: numStr,
+        rawNumberType: isDouble ? "double" : "int",
+        line
+      });
+      continue;
+    }
+    if (/[A-Za-z_$]/.test(ch)) {
+      let id = "";
+      while (i < code.length && /[A-Za-z0-9_$]/.test(code[i])) {
+        id += code[i];
+        i++;
+      }
+      tokens.push({ type: "ident", value: id, line });
+      continue;
+    }
+    let matchedOp = "";
+    for (const op of multiCharOps) {
+      if (code.startsWith(op, i)) {
+        matchedOp = op;
+        break;
+      }
+    }
+    if (matchedOp) {
+      tokens.push({ type: "punct", value: matchedOp, line });
+      i += matchedOp.length;
+      continue;
+    }
+    tokens.push({ type: "punct", value: ch, line });
+    i++;
+  }
+  tokens.push({ type: "eof", value: "", line });
+  return tokens;
+}
+var MODIFIERS = /* @__PURE__ */ new Set([
+  "public",
+  "private",
+  "protected",
+  "static",
+  "final",
+  "abstract",
+  "synchronized",
+  "default",
+  "native"
+]);
+var PRIMITIVE_TYPES = /* @__PURE__ */ new Set([
+  "byte",
+  "short",
+  "int",
+  "long",
+  "float",
+  "double",
+  "boolean",
+  "char",
+  "void"
+]);
+var JavaParser = class {
+  constructor(tokens) {
+    this.tokens = tokens;
+    this.pos = 0;
+  }
+  peek(offset = 0) {
+    return this.tokens[Math.min(this.pos + offset, this.tokens.length - 1)];
+  }
+  next() {
+    return this.tokens[this.pos++];
+  }
+  match(val) {
+    if (this.peek().value === val) {
+      this.pos++;
+      return true;
+    }
+    return false;
+  }
+  expect(val) {
+    const tok = this.peek();
+    if (tok.value !== val) {
+      throw new Error(`Main.java:${tok.line}: error: '${val}' expected, found '${tok.value || "EOF"}'`);
+    }
+    return this.next();
+  }
+  expectIdent() {
+    const tok = this.peek();
+    if (tok.type !== "ident") {
+      throw new Error(`Main.java:${tok.line}: error: identifier expected, found '${tok.value || "EOF"}'`);
+    }
+    return this.next().value;
+  }
+  parseProgram() {
+    const classes = [];
+    while (this.peek().type !== "eof") {
+      if (this.match("package") || this.match("import")) {
+        while (this.peek().type !== "eof" && !this.match(";")) {
+          this.next();
+        }
+        continue;
+      }
+      if (this.match(";")) continue;
+      classes.push(this.parseClassOrInterface());
+    }
+    return classes;
+  }
+  parseModifiers() {
+    const mods = [];
+    while (MODIFIERS.has(this.peek().value)) {
+      mods.push(this.next().value);
+    }
+    return mods;
+  }
+  skipTypeArguments() {
+    if (!this.match("<")) return "";
+    let depth = 1;
+    let acc = "<";
+    while (depth > 0 && this.peek().type !== "eof") {
+      const tok = this.next();
+      if (tok.value === "<") depth++;
+      else if (tok.value === ">") depth--;
+      else if (tok.value === ">>") {
+        depth -= 2;
+      }
+      acc += tok.value;
+    }
+    return acc;
+  }
+  parseType() {
+    let base = this.expectIdent();
+    while (this.match(".")) {
+      base += "." + this.expectIdent();
+    }
+    if (this.peek().value === "<") {
+      this.skipTypeArguments();
+    }
+    while (this.peek().value === "[" && this.peek(1).value === "]") {
+      this.next();
+      this.next();
+      base += "[]";
+    }
+    if (this.peek().value === "." && this.peek(1).value === "." && this.peek(2).value === ".") {
+      this.next();
+      this.next();
+      this.next();
+      base += "[]";
+    }
+    return base;
+  }
+  parseClassOrInterface() {
+    const modifiers = this.parseModifiers();
+    let kind = "class";
+    if (this.match("class")) kind = "class";
+    else if (this.match("interface")) kind = "interface";
+    else if (this.match("enum")) kind = "enum";
+    else {
+      const tok = this.peek();
+      throw new Error(`Main.java:${tok.line}: error: class, interface, or enum expected, found '${tok.value}'`);
+    }
+    const name = this.expectIdent();
+    if (this.peek().value === "<") this.skipTypeArguments();
+    let superClass = null;
+    const interfaces = [];
+    if (this.match("extends")) {
+      if (kind === "interface") {
+        do {
+          interfaces.push(this.parseType());
+        } while (this.match(","));
+      } else {
+        superClass = this.parseType();
+      }
+    }
+    if (this.match("implements")) {
+      do {
+        interfaces.push(this.parseType());
+      } while (this.match(","));
+    }
+    this.expect("{");
+    const enumConstants = [];
+    if (kind === "enum") {
+      while (this.peek().type === "ident") {
+        enumConstants.push(this.expectIdent());
+        if (this.peek().value === "(") {
+          this.next();
+          let d = 1;
+          while (d > 0 && this.peek().type !== "eof") {
+            const v = this.next().value;
+            if (v === "(") d++;
+            else if (v === ")") d--;
+          }
+        }
+        if (!this.match(",")) break;
+      }
+      this.match(";");
+    }
+    const fields = [];
+    const constructors = [];
+    const methods = [];
+    while (this.peek().type !== "eof" && this.peek().value !== "}") {
+      if (this.match(";")) continue;
+      if (this.peek().value === "{" || this.peek().value === "static" && this.peek(1).value === "{") {
+        if (this.peek().value === "static") this.next();
+        this.parseBlock();
+        continue;
+      }
+      const memberMods = this.parseModifiers();
+      if (this.peek().value === "class" || this.peek().value === "interface" || this.peek().value === "enum") {
+        this.parseClassOrInterface();
+        continue;
+      }
+      if (this.peek().value === "<") {
+        this.skipTypeArguments();
+      }
+      if (this.peek().type === "ident" && this.peek().value === name && this.peek(1).value === "(") {
+        const ctorName = this.expectIdent();
+        const params = this.parseParamList();
+        this.skipThrowsClause();
+        const body = this.parseBlock();
+        constructors.push({ modifiers: memberMods, name: ctorName, params, body });
+        continue;
+      }
+      const memberType = this.parseType();
+      const memberName = this.expectIdent();
+      if (this.peek().value === "(") {
+        const params = this.parseParamList();
+        this.skipThrowsClause();
+        let body = null;
+        if (this.peek().value === "{") {
+          body = this.parseBlock();
+        } else {
+          this.expect(";");
+        }
+        methods.push({
+          modifiers: memberMods,
+          returnType: memberType,
+          name: memberName,
+          params,
+          body
+        });
+      } else {
+        let firstType = memberType;
+        while (this.peek().value === "[" && this.peek(1).value === "]") {
+          this.next();
+          this.next();
+          firstType += "[]";
+        }
+        let firstInit;
+        if (this.match("=")) {
+          firstInit = this.parseFieldOrVarInitializer(firstType);
+        }
+        fields.push({
+          modifiers: memberMods,
+          type: firstType,
+          name: memberName,
+          initExpr: firstInit
+        });
+        while (this.match(",")) {
+          const nextName = this.expectIdent();
+          let nextType = memberType;
+          while (this.peek().value === "[" && this.peek(1).value === "]") {
+            this.next();
+            this.next();
+            nextType += "[]";
+          }
+          let nextInit;
+          if (this.match("=")) {
+            nextInit = this.parseFieldOrVarInitializer(nextType);
+          }
+          fields.push({
+            modifiers: memberMods,
+            type: nextType,
+            name: nextName,
+            initExpr: nextInit
+          });
+        }
+        this.expect(";");
+      }
+    }
+    this.expect("}");
+    return {
+      kind,
+      modifiers,
+      name,
+      superClass,
+      interfaces,
+      enumConstants,
+      fields,
+      constructors,
+      methods
+    };
+  }
+  skipThrowsClause() {
+    if (this.match("throws")) {
+      do {
+        this.parseType();
+      } while (this.match(","));
+    }
+  }
+  parseParamList() {
+    this.expect("(");
+    const params = [];
+    while (this.peek().type !== "eof" && this.peek().value !== ")") {
+      this.parseModifiers();
+      let pType = this.parseType();
+      const pName = this.expectIdent();
+      while (this.peek().value === "[" && this.peek(1).value === "]") {
+        this.next();
+        this.next();
+        pType += "[]";
+      }
+      params.push({ type: pType, name: pName });
+      if (!this.match(",")) break;
+    }
+    this.expect(")");
+    return params;
+  }
+  parseFieldOrVarInitializer(declaredType) {
+    if (this.peek().value === "{") {
+      this.expect("{");
+      const values = [];
+      while (this.peek().type !== "eof" && this.peek().value !== "}") {
+        values.push(this.parseExpression());
+        if (!this.match(",")) break;
+      }
+      this.expect("}");
+      const elemType = declaredType.endsWith("[]") ? declaredType.slice(0, -2) : "Object";
+      return { kind: "newArray", elemType, initValues: values };
+    }
+    return this.parseExpression();
+  }
+  parseBlock() {
+    this.expect("{");
+    const stmts = [];
+    while (this.peek().type !== "eof" && this.peek().value !== "}") {
+      if (this.match(";")) continue;
+      stmts.push(this.parseStatement());
+    }
+    this.expect("}");
+    return stmts;
+  }
+  isLocalVarDecl() {
+    let offset = 0;
+    while (MODIFIERS.has(this.peek(offset).value)) {
+      offset++;
+    }
+    const t = this.peek(offset);
+    if (t.type !== "ident") return false;
+    if (t.value === "return" || t.value === "if" || t.value === "for" || t.value === "while" || t.value === "do" || t.value === "switch" || t.value === "try" || t.value === "throw" || t.value === "break" || t.value === "continue" || t.value === "this" || t.value === "super" || t.value === "new") {
+      return false;
+    }
+    if (PRIMITIVE_TYPES.has(t.value)) return true;
+    offset++;
+    while (this.peek(offset).value === ".") {
+      offset += 2;
+    }
+    if (this.peek(offset).value === "<") {
+      let depth = 1;
+      offset++;
+      while (depth > 0 && this.peek(offset).type !== "eof") {
+        const v = this.peek(offset).value;
+        if (v === "<") depth++;
+        else if (v === ">") depth--;
+        else if (v === ">>") depth -= 2;
+        offset++;
+      }
+    }
+    while (this.peek(offset).value === "[" && this.peek(offset + 1).value === "]") {
+      offset += 2;
+    }
+    return this.peek(offset).type === "ident";
+  }
+  parseStatement() {
+    const tok = this.peek();
+    if (tok.value === "{") {
+      return { kind: "block", stmts: this.parseBlock() };
+    }
+    if (this.match("if")) {
+      this.expect("(");
+      const cond = this.parseExpression();
+      this.expect(")");
+      const thenBranch = this.parseStatement();
+      let elseBranch;
+      if (this.match("else")) {
+        elseBranch = this.parseStatement();
+      }
+      return { kind: "if", cond, thenBranch, elseBranch };
+    }
+    if (this.match("while")) {
+      this.expect("(");
+      const cond = this.parseExpression();
+      this.expect(")");
+      const body = this.parseStatement();
+      return { kind: "while", cond, body };
+    }
+    if (this.match("do")) {
+      const body = this.parseStatement();
+      this.expect("while");
+      this.expect("(");
+      const cond = this.parseExpression();
+      this.expect(")");
+      this.expect(";");
+      return { kind: "doWhile", body, cond };
+    }
+    if (this.match("for")) {
+      this.expect("(");
+      const savedPos = this.pos;
+      try {
+        this.parseModifiers();
+        const fType = this.parseType();
+        const fName = this.expectIdent();
+        if (this.match(":")) {
+          const iterable = this.parseExpression();
+          this.expect(")");
+          const body2 = this.parseStatement();
+          return { kind: "forEach", type: fType, name: fName, iterable, body: body2 };
+        }
+      } catch {
+      }
+      this.pos = savedPos;
+      let init;
+      if (!this.match(";")) {
+        if (this.isLocalVarDecl()) {
+          init = this.parseVarDeclStmt();
+        } else {
+          const expr2 = this.parseExpression();
+          this.expect(";");
+          init = { kind: "exprStmt", expr: expr2 };
+        }
+      }
+      let cond;
+      if (!this.match(";")) {
+        cond = this.parseExpression();
+        this.expect(";");
+      }
+      const update = [];
+      if (this.peek().value !== ")") {
+        do {
+          update.push(this.parseExpression());
+        } while (this.match(","));
+      }
+      this.expect(")");
+      const body = this.parseStatement();
+      return { kind: "for", init, cond, update, body };
+    }
+    if (this.match("switch")) {
+      this.expect("(");
+      const expr2 = this.parseExpression();
+      this.expect(")");
+      this.expect("{");
+      const cases = [];
+      while (this.peek().type !== "eof" && this.peek().value !== "}") {
+        const values = [];
+        while (this.peek().value === "case" || this.peek().value === "default") {
+          if (this.match("case")) {
+            values.push(this.parseExpression());
+            this.expect(":");
+          } else if (this.match("default")) {
+            values.push(null);
+            this.expect(":");
+          }
+        }
+        const stmts = [];
+        while (this.peek().type !== "eof" && this.peek().value !== "}" && this.peek().value !== "case" && this.peek().value !== "default") {
+          if (this.match(";")) continue;
+          stmts.push(this.parseStatement());
+        }
+        cases.push({ values, stmts });
+      }
+      this.expect("}");
+      return { kind: "switch", expr: expr2, cases };
+    }
+    if (this.match("return")) {
+      if (this.match(";")) {
+        return { kind: "return" };
+      }
+      const expr2 = this.parseExpression();
+      this.expect(";");
+      return { kind: "return", expr: expr2 };
+    }
+    if (this.match("break")) {
+      this.expect(";");
+      return { kind: "break" };
+    }
+    if (this.match("continue")) {
+      this.expect(";");
+      return { kind: "continue" };
+    }
+    if (this.match("throw")) {
+      const expr2 = this.parseExpression();
+      this.expect(";");
+      return { kind: "throw", expr: expr2 };
+    }
+    if (this.match("try")) {
+      const tryBlock = this.parseBlock();
+      const catches = [];
+      while (this.match("catch")) {
+        this.expect("(");
+        this.parseModifiers();
+        const cTypes = [this.parseType()];
+        while (this.match("|")) {
+          cTypes.push(this.parseType());
+        }
+        const cName = this.expectIdent();
+        this.expect(")");
+        const cBody = this.parseBlock();
+        catches.push({ types: cTypes, name: cName, body: cBody });
+      }
+      let finallyBlock;
+      if (this.match("finally")) {
+        finallyBlock = this.parseBlock();
+      }
+      return { kind: "try", tryBlock, catches, finallyBlock };
+    }
+    if (this.peek().value === "this" && this.peek(1).value === "(") {
+      this.next();
+      const args = this.parseArgs();
+      this.expect(";");
+      return { kind: "thisCall", args };
+    }
+    if (this.peek().value === "super" && this.peek(1).value === "(") {
+      this.next();
+      const args = this.parseArgs();
+      this.expect(";");
+      return { kind: "superCall", args };
+    }
+    if (this.isLocalVarDecl()) {
+      return this.parseVarDeclStmt();
+    }
+    const expr = this.parseExpression();
+    this.expect(";");
+    return { kind: "exprStmt", expr };
+  }
+  parseVarDeclStmt() {
+    this.parseModifiers();
+    const baseType = this.parseType();
+    const declarations = [];
+    do {
+      const varName = this.expectIdent();
+      let fullType = baseType;
+      while (this.peek().value === "[" && this.peek(1).value === "]") {
+        this.next();
+        this.next();
+        fullType += "[]";
+      }
+      let init;
+      if (this.match("=")) {
+        init = this.parseFieldOrVarInitializer(fullType);
+      }
+      declarations.push({ name: varName, init });
+    } while (this.match(","));
+    this.expect(";");
+    return { kind: "varDecl", type: baseType, declarations };
+  }
+  parseArgs() {
+    this.expect("(");
+    const args = [];
+    while (this.peek().type !== "eof" && this.peek().value !== ")") {
+      args.push(this.parseExpression());
+      if (!this.match(",")) break;
+    }
+    this.expect(")");
+    return args;
+  }
+  parseExpression() {
+    return this.parseAssignment();
+  }
+  parseAssignment() {
+    const left = this.parseTernary();
+    const tok = this.peek();
+    if (["=", "+=", "-=", "*=", "/=", "%="].includes(tok.value)) {
+      const op = this.next().value;
+      const value = this.parseAssignment();
+      return { kind: "assign", op, target: left, value };
+    }
+    return left;
+  }
+  parseTernary() {
+    const cond = this.parseLogicalOr();
+    if (this.match("?")) {
+      const thenExpr = this.parseExpression();
+      this.expect(":");
+      const elseExpr = this.parseTernary();
+      return { kind: "ternary", cond, thenExpr, elseExpr };
+    }
+    return cond;
+  }
+  parseLogicalOr() {
+    let left = this.parseLogicalAnd();
+    while (this.match("||")) {
+      const right = this.parseLogicalAnd();
+      left = { kind: "binary", op: "||", left, right };
+    }
+    return left;
+  }
+  parseLogicalAnd() {
+    let left = this.parseBitwiseOr();
+    while (this.match("&&")) {
+      const right = this.parseBitwiseOr();
+      left = { kind: "binary", op: "&&", left, right };
+    }
+    return left;
+  }
+  parseBitwiseOr() {
+    let left = this.parseBitwiseXor();
+    while (this.match("|")) {
+      const right = this.parseBitwiseXor();
+      left = { kind: "binary", op: "|", left, right };
+    }
+    return left;
+  }
+  parseBitwiseXor() {
+    let left = this.parseBitwiseAnd();
+    while (this.match("^")) {
+      const right = this.parseBitwiseAnd();
+      left = { kind: "binary", op: "^", left, right };
+    }
+    return left;
+  }
+  parseBitwiseAnd() {
+    let left = this.parseEquality();
+    while (this.match("&")) {
+      const right = this.parseEquality();
+      left = { kind: "binary", op: "&", left, right };
+    }
+    return left;
+  }
+  parseEquality() {
+    let left = this.parseRelational();
+    while (this.peek().value === "==" || this.peek().value === "!=") {
+      const op = this.next().value;
+      const right = this.parseRelational();
+      left = { kind: "binary", op, left, right };
+    }
+    return left;
+  }
+  parseRelational() {
+    let left = this.parseShift();
+    while (true) {
+      if (this.match("instanceof")) {
+        const targetType = this.parseType();
+        left = { kind: "instanceof", expr: left, targetType };
+      } else if (["<", "<=", ">", ">="].includes(this.peek().value)) {
+        const op = this.next().value;
+        const right = this.parseShift();
+        left = { kind: "binary", op, left, right };
+      } else {
+        break;
+      }
+    }
+    return left;
+  }
+  parseShift() {
+    let left = this.parseAdditive();
+    while (["<<", ">>", ">>>"].includes(this.peek().value)) {
+      const op = this.next().value;
+      const right = this.parseAdditive();
+      left = { kind: "binary", op, left, right };
+    }
+    return left;
+  }
+  parseAdditive() {
+    let left = this.parseMultiplicative();
+    while (this.peek().value === "+" || this.peek().value === "-") {
+      const op = this.next().value;
+      const right = this.parseMultiplicative();
+      left = { kind: "binary", op, left, right };
+    }
+    return left;
+  }
+  parseMultiplicative() {
+    let left = this.parseUnary();
+    while (["*", "/", "%"].includes(this.peek().value)) {
+      const op = this.next().value;
+      const right = this.parseUnary();
+      left = { kind: "binary", op, left, right };
+    }
+    return left;
+  }
+  isTypeCastLookahead() {
+    if (this.peek().value !== "(") return false;
+    const t1 = this.peek(1);
+    if (t1.type !== "ident") return false;
+    if (PRIMITIVE_TYPES.has(t1.value) && this.peek(2).value === ")") {
+      return true;
+    }
+    if (this.peek(2).value === ")") {
+      const after = this.peek(3);
+      if (after.type === "ident" || after.type === "string" || after.type === "number" || after.value === "(") {
+        return true;
+      }
+    }
+    return false;
+  }
+  parseUnary() {
+    if (this.isTypeCastLookahead()) {
+      this.expect("(");
+      const targetType = this.parseType();
+      this.expect(")");
+      const expr = this.parseUnary();
+      return { kind: "cast", targetType, expr };
+    }
+    if (["+", "-", "!", "++", "--"].includes(this.peek().value)) {
+      const op = this.next().value;
+      const expr = this.parseUnary();
+      return { kind: "unary", op, expr, prefix: true };
+    }
+    return this.parsePostfix();
+  }
+  parsePostfix() {
+    let expr = this.parsePrimary();
+    while (true) {
+      if (this.match(".")) {
+        const prop = this.expectIdent();
+        expr = { kind: "member", object: expr, property: prop };
+      } else if (this.match("[")) {
+        const idx = this.parseExpression();
+        this.expect("]");
+        expr = { kind: "index", array: expr, index: idx };
+      } else if (this.peek().value === "(") {
+        const args = this.parseArgs();
+        expr = { kind: "call", callee: expr, args };
+      } else if (this.peek().value === "++" || this.peek().value === "--") {
+        const op = this.next().value;
+        expr = { kind: "unary", op, expr, prefix: false };
+      } else {
+        break;
+      }
+    }
+    return expr;
+  }
+  parsePrimary() {
+    const tok = this.peek();
+    if (tok.type === "number") {
+      this.next();
+      const numType = tok.rawNumberType || "int";
+      return {
+        kind: "literal",
+        val: {
+          type: numType,
+          value: numType === "double" ? parseFloat(tok.value) : parseInt(tok.value, 10)
+        }
+      };
+    }
+    if (tok.type === "string") {
+      this.next();
+      return {
+        kind: "literal",
+        val: { type: "String", value: tok.value }
+      };
+    }
+    if (tok.type === "char") {
+      this.next();
+      return {
+        kind: "literal",
+        val: { type: "char", value: tok.value }
+      };
+    }
+    if (this.match("true")) {
+      return { kind: "literal", val: { type: "boolean", value: true } };
+    }
+    if (this.match("false")) {
+      return { kind: "literal", val: { type: "boolean", value: false } };
+    }
+    if (this.match("null")) {
+      return { kind: "literal", val: { type: "null", value: null } };
+    }
+    if (this.match("this")) {
+      return { kind: "this" };
+    }
+    if (this.match("super")) {
+      return { kind: "super" };
+    }
+    if (this.match("new")) {
+      const className = this.expectIdent();
+      let typeArgs = "";
+      if (this.peek().value === "<") {
+        typeArgs = this.skipTypeArguments();
+      }
+      if (this.match("[")) {
+        if (this.match("]")) {
+          this.expect("{");
+          const initValues = [];
+          while (this.peek().type !== "eof" && this.peek().value !== "}") {
+            initValues.push(this.parseExpression());
+            if (!this.match(",")) break;
+          }
+          this.expect("}");
+          return { kind: "newArray", elemType: className, initValues };
+        }
+        const size = this.parseExpression();
+        this.expect("]");
+        return { kind: "newArray", elemType: className, size };
+      }
+      const args = this.parseArgs();
+      return { kind: "new", className, typeArgs, args };
+    }
+    if (this.match("(")) {
+      const expr = this.parseExpression();
+      this.expect(")");
+      return expr;
+    }
+    if (tok.type === "ident") {
+      this.next();
+      return { kind: "ident", name: tok.value };
+    }
+    throw new Error(`Main.java:${tok.line}: error: illegal start of expression '${tok.value}'`);
+  }
+};
+var Scope = class {
+  constructor(parent = null) {
+    this.parent = parent;
+    this.vars = /* @__PURE__ */ new Map();
+  }
+  declare(name, val) {
+    this.vars.set(name, val);
+  }
+  has(name) {
+    if (this.vars.has(name)) return true;
+    return this.parent ? this.parent.has(name) : false;
+  }
+  get(name) {
+    if (this.vars.has(name)) return this.vars.get(name);
+    return this.parent ? this.parent.get(name) : void 0;
+  }
+  set(name, val) {
+    if (this.vars.has(name)) {
+      const existing = this.vars.get(name);
+      this.vars.set(name, coerceToType(val, existing.type));
+      return true;
+    }
+    if (this.parent) return this.parent.set(name, val);
+    return false;
+  }
+};
+function defaultForType(type) {
+  if (type === "int" || type === "short" || type === "byte" || type === "long") {
+    return { type: "int", value: 0 };
+  }
+  if (type === "double" || type === "float") {
+    return { type: "double", value: 0 };
+  }
+  if (type === "boolean") {
+    return { type: "boolean", value: false };
+  }
+  if (type === "char") {
+    return { type: "char", value: "\0" };
+  }
+  return { type: "null", value: null, className: type };
+}
+function coerceToType(val, targetType) {
+  if (targetType === "int" || targetType === "long" || targetType === "short" || targetType === "byte") {
+    if (val.type === "char") {
+      return { type: "int", value: String(val.value).charCodeAt(0) || 0 };
+    }
+    return { type: "int", value: Math.trunc(Number(val.value)) };
+  }
+  if (targetType === "double" || targetType === "float") {
+    return { type: "double", value: Number(val.value) };
+  }
+  if (targetType === "boolean") {
+    return { type: "boolean", value: Boolean(val.value) };
+  }
+  if (targetType === "String") {
+    if (val.type === "null") return { type: "null", value: null };
+    return { type: "String", value: formatJavaVal(val) };
+  }
+  return val;
+}
+function formatJavaVal(val) {
+  if (!val || val.type === "null" || val.value === null || val.value === void 0) {
+    return "null";
+  }
+  if (val.type === "double" || val.type === "float") {
+    const n = Number(val.value);
+    if (Number.isInteger(n)) {
+      return n.toFixed(1);
+    }
+    return String(n);
+  }
+  if (val.type === "int" || val.type === "long" || val.type === "short" || val.type === "byte") {
+    return String(Math.trunc(Number(val.value)));
+  }
+  if (val.type === "boolean") {
+    return val.value ? "true" : "false";
+  }
+  if (val.type === "String" || val.type === "char") {
+    return String(val.value);
+  }
+  if (val.type === "list" || val.type === "set" || val.type === "array") {
+    const arr = val.value;
+    return "[" + arr.map((x) => formatJavaVal(x)).join(", ") + "]";
+  }
+  if (val.type === "map") {
+    const map = val.value;
+    const entries = [];
+    map.forEach((entry) => {
+      entries.push(`${formatJavaVal(entry.key)}=${formatJavaVal(entry.val)}`);
+    });
+    return "{" + entries.join(", ") + "}";
+  }
+  if (val.type === "stringbuilder") {
+    return String(val.value.str);
+  }
+  return String(val.value);
+}
+function executeJavaAST(code) {
+  const startTime = Date.now();
+  let braceDepth = 0;
+  for (const ch of code) {
+    if (ch === "{") braceDepth++;
+    if (ch === "}") braceDepth--;
+  }
+  if (braceDepth !== 0) {
+    return {
+      success: false,
+      compilationError: "Main.java: error: reached end of file while parsing (unbalanced curly braces)",
+      runtimeError: null,
+      stdout: "",
+      stderr: "Main.java: error: reached end of file while parsing",
+      executionTimeMs: Date.now() - startTime
+    };
+  }
+  let classes;
+  try {
+    const tokens = tokenize(code);
+    const parser = new JavaParser(tokens);
+    classes = parser.parseProgram();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Syntax error";
+    return {
+      success: false,
+      compilationError: msg,
+      runtimeError: null,
+      stdout: "",
+      stderr: msg,
+      executionTimeMs: Date.now() - startTime
+    };
+  }
+  const classMap = /* @__PURE__ */ new Map();
+  const staticFields = /* @__PURE__ */ new Map();
+  for (const c of classes) {
+    classMap.set(c.name, c);
+    staticFields.set(c.name, /* @__PURE__ */ new Map());
+  }
+  let stdout = "";
+  let stepCount = 0;
+  const MAX_STEPS = 1e5;
+  function formatRuntimeVal(val) {
+    if (!val || val.type === "null" || val.value === null || val.value === void 0) {
+      return "null";
+    }
+    if (val.type === "object" && val.value) {
+      const inst = val.value;
+      const toStr = findMethod(inst.className, "toString", []);
+      if (toStr && toStr.decl.body) {
+        const res = invokeMethod(inst, inst.className, "toString", []);
+        return formatJavaVal(res);
+      }
+      if (inst.fields.has("message")) {
+        return `${inst.className}: ${formatJavaVal(inst.fields.get("message"))}`;
+      }
+      return `${inst.className}@1`;
+    }
+    return formatJavaVal(val);
+  }
+  function formatPrintfString(fmt, fmtArgs) {
+    let argIdx = 0;
+    return fmt.replace(/%(-?\d+)?(\.\d+)?[sdfbn%]/g, (spec) => {
+      if (spec === "%%") return "%";
+      if (spec === "%n") return "\n";
+      const a = fmtArgs[argIdx++];
+      if (!a) return "";
+      if (spec.endsWith("f")) {
+        const dotMatch = spec.match(/\.(\d+)f$/);
+        if (dotMatch) {
+          const digits = parseInt(dotMatch[1], 10);
+          return Number(a.value).toFixed(digits);
+        }
+        return String(Number(a.value));
+      }
+      if (spec.endsWith("d")) {
+        return String(Math.trunc(Number(a.value)));
+      }
+      if (spec.endsWith("b")) {
+        return a.value ? "true" : "false";
+      }
+      return formatRuntimeVal(a);
+    });
+  }
+  function checkStep() {
+    stepCount++;
+    if (stepCount > MAX_STEPS) {
+      throw new JavaExceptionSignal(
+        { type: "object", value: null, className: "RuntimeException" },
+        "Execution timed out (possible infinite loop)",
+        "RuntimeException"
+      );
+    }
+  }
+  function isSubTypeOf(subClass, targetType) {
+    if (subClass === targetType || targetType === "Object") return true;
+    const decl = classMap.get(subClass);
+    if (!decl) {
+      if (targetType === "Exception" || targetType === "RuntimeException" || targetType === "Throwable") {
+        return subClass.endsWith("Exception") || subClass.endsWith("Error");
+      }
+      return false;
+    }
+    if (decl.superClass && isSubTypeOf(decl.superClass, targetType)) return true;
+    for (const iface of decl.interfaces) {
+      if (isSubTypeOf(iface, targetType)) return true;
+    }
+    return false;
+  }
+  function scoreParamMatch(paramType, argVal) {
+    const cleanParam = paramType.replace(/<.*>/, "");
+    if (argVal.type === "null") {
+      return PRIMITIVE_TYPES.has(cleanParam) ? null : 2;
+    }
+    if (cleanParam === "Object") return 1;
+    if (cleanParam === "String") {
+      return argVal.type === "String" ? 2 : null;
+    }
+    if (cleanParam === "boolean" || cleanParam === "Boolean") {
+      return argVal.type === "boolean" ? 2 : null;
+    }
+    if (cleanParam === "char" || cleanParam === "Character") {
+      return argVal.type === "char" ? 2 : null;
+    }
+    if (cleanParam === "int" || cleanParam === "Integer" || cleanParam === "long" || cleanParam === "short" || cleanParam === "byte") {
+      if (argVal.type === "int" || argVal.type === "long") return 2;
+      if (argVal.type === "char") return 1;
+      return null;
+    }
+    if (cleanParam === "double" || cleanParam === "Double" || cleanParam === "float" || cleanParam === "Float") {
+      if (argVal.type === "double" || argVal.type === "float") return 2;
+      if (argVal.type === "int" || argVal.type === "long") return 1;
+      return null;
+    }
+    if (cleanParam.endsWith("[]")) {
+      return argVal.type === "array" ? 2 : null;
+    }
+    if (cleanParam === "List" || cleanParam === "ArrayList") {
+      return argVal.type === "list" ? 2 : null;
+    }
+    if (cleanParam === "Map" || cleanParam === "HashMap") {
+      return argVal.type === "map" ? 2 : null;
+    }
+    if (cleanParam === "Set" || cleanParam === "HashSet") {
+      return argVal.type === "set" ? 2 : null;
+    }
+    if (argVal.type === "object" && argVal.className) {
+      if (argVal.className === cleanParam) return 2;
+      if (isSubTypeOf(argVal.className, cleanParam)) return 1;
+    }
+    return null;
+  }
+  function selectBestOverload(candidates, args) {
+    const arityMatches = candidates.filter((c) => c.params.length === args.length);
+    let best = null;
+    let bestScore = -1;
+    for (const cand of arityMatches) {
+      let score = 0;
+      let compatible = true;
+      for (let i = 0; i < args.length; i++) {
+        const s = scoreParamMatch(cand.params[i].type, args[i]);
+        if (s === null) {
+          compatible = false;
+          break;
+        }
+        score += s;
+      }
+      if (compatible && score > bestScore) {
+        bestScore = score;
+        best = cand;
+      }
+    }
+    return best;
+  }
+  function findMethod(className, methodName, args) {
+    let curr = className;
+    while (curr) {
+      const cDecl = classMap.get(curr);
+      if (!cDecl) break;
+      const candidates = cDecl.methods.filter((m) => m.name === methodName && m.body !== null);
+      const best = selectBestOverload(candidates, args);
+      if (best) return { decl: best, ownerClass: curr };
+      for (const ifaceName of cDecl.interfaces) {
+        const ifaceDecl = classMap.get(ifaceName);
+        if (ifaceDecl) {
+          const iCandidates = ifaceDecl.methods.filter((m) => m.name === methodName && m.body !== null);
+          const iBest = selectBestOverload(iCandidates, args);
+          if (iBest) return { decl: iBest, ownerClass: ifaceName };
+        }
+      }
+      curr = cDecl.superClass;
+    }
+    return null;
+  }
+  function initInstanceFields(instance, className) {
+    const cDecl = classMap.get(className);
+    if (!cDecl) return;
+    if (cDecl.superClass) {
+      initInstanceFields(instance, cDecl.superClass);
+    }
+    const scope = new Scope();
+    for (const f of cDecl.fields) {
+      if (f.modifiers.includes("static")) continue;
+      const val = f.initExpr ? coerceToType(evalExpr(f.initExpr, scope, instance, className), f.type) : defaultForType(f.type);
+      instance.fields.set(f.name, val);
+    }
+  }
+  function invokeConstructor(instance, className, args) {
+    const cDecl = classMap.get(className);
+    if (!cDecl) {
+      if (args.length > 0) {
+        instance.fields.set("message", coerceToType(args[0], "String"));
+      }
+      return;
+    }
+    if (cDecl.constructors.length === 0) {
+      if (cDecl.superClass) {
+        invokeConstructor(instance, cDecl.superClass, []);
+      }
+      return;
+    }
+    const ctor = selectBestOverload(cDecl.constructors, args);
+    if (!ctor) {
+      throw new Error(`Main.java: error: no suitable constructor found for ${className}(${args.map((a) => a.type).join(", ")})`);
+    }
+    const scope = new Scope();
+    for (let i = 0; i < ctor.params.length; i++) {
+      scope.declare(ctor.params[i].name, coerceToType(args[i], ctor.params[i].type));
+    }
+    let stmts = ctor.body;
+    const firstStmt = stmts[0];
+    if (firstStmt && firstStmt.kind === "thisCall") {
+      const chainedArgs = firstStmt.args.map((a) => evalExpr(a, scope, instance, className));
+      invokeConstructor(instance, className, chainedArgs);
+      stmts = stmts.slice(1);
+    } else if (firstStmt && firstStmt.kind === "superCall") {
+      const superArgs = firstStmt.args.map((a) => evalExpr(a, scope, instance, className));
+      if (cDecl.superClass) {
+        invokeConstructor(instance, cDecl.superClass, superArgs);
+      } else {
+        if (superArgs.length > 0) {
+          instance.fields.set("message", coerceToType(superArgs[0], "String"));
+        }
+      }
+      stmts = stmts.slice(1);
+    } else if (cDecl.superClass) {
+      invokeConstructor(instance, cDecl.superClass, []);
+    }
+    try {
+      execBlock(stmts, scope, instance, className);
+    } catch (sig) {
+      if (sig instanceof ReturnSignal) return;
+      throw sig;
+    }
+  }
+  function invokeMethod(instance, className, methodName, args) {
+    checkStep();
+    if (instance && methodName === "getMessage" && instance.fields.has("message")) {
+      return instance.fields.get("message");
+    }
+    const found = findMethod(className, methodName, args);
+    if (!found || !found.decl.body) {
+      if (instance && methodName === "toString" && args.length === 0) {
+        return { type: "String", value: `${instance.className}@1` };
+      }
+      throw new Error(`Main.java: error: cannot find symbol method ${methodName}(${args.map((a) => a.type).join(", ")}) in class ${className}`);
+    }
+    const { decl, ownerClass } = found;
+    if (!decl.body) {
+      throw new Error(`Main.java: error: cannot find implementation for method ${methodName} in class ${className}`);
+    }
+    const methodScope = new Scope();
+    for (let i = 0; i < decl.params.length; i++) {
+      methodScope.declare(decl.params[i].name, coerceToType(args[i], decl.params[i].type));
+    }
+    try {
+      execBlock(decl.body, methodScope, instance, ownerClass);
+    } catch (sig) {
+      if (sig instanceof ReturnSignal) {
+        return decl.returnType === "void" ? { type: "void", value: void 0 } : coerceToType(sig.value, decl.returnType);
+      }
+      throw sig;
+    }
+    return { type: "void", value: void 0 };
+  }
+  function execBlock(stmts, scope, thisObj, currentClass) {
+    for (const stmt of stmts) {
+      execStmt(stmt, scope, thisObj, currentClass);
+    }
+  }
+  function execStmt(stmt, scope, thisObj, currentClass) {
+    checkStep();
+    switch (stmt.kind) {
+      case "block": {
+        const childScope = new Scope(scope);
+        execBlock(stmt.stmts, childScope, thisObj, currentClass);
+        break;
+      }
+      case "varDecl": {
+        for (const decl of stmt.declarations) {
+          const val = decl.init ? coerceToType(evalExpr(decl.init, scope, thisObj, currentClass), stmt.type) : defaultForType(stmt.type);
+          scope.declare(decl.name, val);
+        }
+        break;
+      }
+      case "exprStmt": {
+        evalExpr(stmt.expr, scope, thisObj, currentClass);
+        break;
+      }
+      case "if": {
+        const c = evalExpr(stmt.cond, scope, thisObj, currentClass);
+        if (c.value) {
+          execStmt(stmt.thenBranch, new Scope(scope), thisObj, currentClass);
+        } else if (stmt.elseBranch) {
+          execStmt(stmt.elseBranch, new Scope(scope), thisObj, currentClass);
+        }
+        break;
+      }
+      case "while": {
+        while (evalExpr(stmt.cond, scope, thisObj, currentClass).value) {
+          checkStep();
+          try {
+            execStmt(stmt.body, new Scope(scope), thisObj, currentClass);
+          } catch (sig) {
+            if (sig instanceof BreakSignal) break;
+            if (sig instanceof ContinueSignal) continue;
+            throw sig;
+          }
+        }
+        break;
+      }
+      case "doWhile": {
+        do {
+          checkStep();
+          try {
+            execStmt(stmt.body, new Scope(scope), thisObj, currentClass);
+          } catch (sig) {
+            if (sig instanceof BreakSignal) break;
+            if (sig instanceof ContinueSignal) continue;
+            throw sig;
+          }
+        } while (evalExpr(stmt.cond, scope, thisObj, currentClass).value);
+        break;
+      }
+      case "for": {
+        const forScope = new Scope(scope);
+        if (stmt.init) execStmt(stmt.init, forScope, thisObj, currentClass);
+        while (!stmt.cond || evalExpr(stmt.cond, forScope, thisObj, currentClass).value) {
+          checkStep();
+          try {
+            execStmt(stmt.body, new Scope(forScope), thisObj, currentClass);
+          } catch (sig) {
+            if (sig instanceof BreakSignal) break;
+            if (sig instanceof ContinueSignal) {
+            } else {
+              throw sig;
+            }
+          }
+          if (stmt.update) {
+            for (const u of stmt.update) {
+              evalExpr(u, forScope, thisObj, currentClass);
+            }
+          }
+        }
+        break;
+      }
+      case "forEach": {
+        const iterVal = evalExpr(stmt.iterable, scope, thisObj, currentClass);
+        let items = [];
+        if (iterVal.type === "array" || iterVal.type === "list" || iterVal.type === "set") {
+          items = iterVal.value;
+        }
+        for (const item of items) {
+          checkStep();
+          const loopScope = new Scope(scope);
+          loopScope.declare(stmt.name, coerceToType(item, stmt.type));
+          try {
+            execStmt(stmt.body, loopScope, thisObj, currentClass);
+          } catch (sig) {
+            if (sig instanceof BreakSignal) break;
+            if (sig instanceof ContinueSignal) continue;
+            throw sig;
+          }
+        }
+        break;
+      }
+      case "switch": {
+        const target = evalExpr(stmt.expr, scope, thisObj, currentClass);
+        let matched = false;
+        const switchScope = new Scope(scope);
+        try {
+          for (const c of stmt.cases) {
+            if (!matched) {
+              for (const v of c.values) {
+                if (v === null) {
+                  matched = true;
+                  break;
+                }
+                const caseVal = evalExpr(v, switchScope, thisObj, currentClass);
+                if (caseVal.value === target.value) {
+                  matched = true;
+                  break;
+                }
+              }
+            }
+            if (matched) {
+              execBlock(c.stmts, switchScope, thisObj, currentClass);
+            }
+          }
+        } catch (sig) {
+          if (!(sig instanceof BreakSignal)) throw sig;
+        }
+        break;
+      }
+      case "return": {
+        const val = stmt.expr ? evalExpr(stmt.expr, scope, thisObj, currentClass) : { type: "void", value: void 0 };
+        throw new ReturnSignal(val);
+      }
+      case "break":
+        throw new BreakSignal();
+      case "continue":
+        throw new ContinueSignal();
+      case "throw": {
+        const exVal = evalExpr(stmt.expr, scope, thisObj, currentClass);
+        let msg = "";
+        let exType = exVal.className || "Exception";
+        if (exVal.type === "object" && exVal.value) {
+          const inst = exVal.value;
+          exType = inst.className;
+          const m = inst.fields.get("message");
+          if (m) msg = formatJavaVal(m);
+        }
+        throw new JavaExceptionSignal(exVal, msg, exType);
+      }
+      case "try": {
+        try {
+          execBlock(stmt.tryBlock, new Scope(scope), thisObj, currentClass);
+        } catch (sig) {
+          if (sig instanceof JavaExceptionSignal) {
+            let handled = false;
+            for (const c of stmt.catches) {
+              const matchesAny = c.types.some(
+                (t) => t === "Exception" || t === "RuntimeException" || t === "Throwable" || t === sig.exceptionType || isSubTypeOf(sig.exceptionType, t)
+              );
+              if (matchesAny) {
+                const catchScope = new Scope(scope);
+                catchScope.declare(c.name, sig.exceptionObj);
+                execBlock(c.body, catchScope, thisObj, currentClass);
+                handled = true;
+                break;
+              }
+            }
+            if (!handled) throw sig;
+          } else {
+            throw sig;
+          }
+        } finally {
+          if (stmt.finallyBlock) {
+            execBlock(stmt.finallyBlock, new Scope(scope), thisObj, currentClass);
+          }
+        }
+        break;
+      }
+    }
+  }
+  function findStaticField(className, fieldName) {
+    let curr = className;
+    while (curr) {
+      const sf = staticFields.get(curr);
+      if (sf && sf.has(fieldName)) return sf.get(fieldName);
+      const cDecl = classMap.get(curr);
+      if (!cDecl) break;
+      for (const iface of cDecl.interfaces) {
+        const isf = staticFields.get(iface);
+        if (isf && isf.has(fieldName)) return isf.get(fieldName);
+      }
+      curr = cDecl.superClass;
+    }
+    return void 0;
+  }
+  function resolveIdentifier(name, scope, thisObj, currentClass) {
+    const local = scope.get(name);
+    if (local !== void 0) return local;
+    if (thisObj && thisObj.fields.has(name)) {
+      return thisObj.fields.get(name);
+    }
+    const staticVal = findStaticField(thisObj?.className || currentClass, name) ?? findStaticField(currentClass, name);
+    if (staticVal !== void 0) {
+      return staticVal;
+    }
+    if (classMap.has(name) || ["System", "Math", "Integer", "Double", "Boolean", "String", "Arrays", "Collections", "List", "Set", "Map", "LocalDate", "LocalDateTime", "UUID", "Objects"].includes(name)) {
+      return { type: "classRef", value: name };
+    }
+    throw new Error(`Main.java: error: cannot find symbol variable ${name}`);
+  }
+  function assignTarget(target, op, rhs, scope, thisObj, currentClass) {
+    const applyOp = (cur, right) => {
+      if (op === "=") return right;
+      const binOp = op.slice(0, -1);
+      return evalBinary(binOp, cur, right);
+    };
+    if (target.kind === "ident") {
+      if (scope.has(target.name)) {
+        const cur = scope.get(target.name);
+        const nextVal = applyOp(cur, rhs);
+        scope.set(target.name, nextVal);
+        return scope.get(target.name);
+      }
+      if (thisObj && thisObj.fields.has(target.name)) {
+        const cur = thisObj.fields.get(target.name);
+        const nextVal = coerceToType(applyOp(cur, rhs), cur.type);
+        thisObj.fields.set(target.name, nextVal);
+        return nextVal;
+      }
+      let curr = currentClass;
+      while (curr) {
+        const sf = staticFields.get(curr);
+        if (sf && sf.has(target.name)) {
+          const cur = sf.get(target.name);
+          const nextVal = coerceToType(applyOp(cur, rhs), cur.type);
+          sf.set(target.name, nextVal);
+          return nextVal;
+        }
+        curr = classMap.get(curr)?.superClass || null;
+      }
+      throw new Error(`Main.java: error: cannot find symbol variable ${target.name}`);
+    }
+    if (target.kind === "member") {
+      const obj = evalExpr(target.object, scope, thisObj, currentClass);
+      if (obj.type === "classRef") {
+        const sf = staticFields.get(obj.value);
+        if (sf && sf.has(target.property)) {
+          const cur = sf.get(target.property);
+          const nextVal = coerceToType(applyOp(cur, rhs), cur.type);
+          sf.set(target.property, nextVal);
+          return nextVal;
+        }
+      }
+      if ((obj.type === "object" || obj.type === "superRef") && obj.value) {
+        const inst = obj.value;
+        const cur = inst.fields.get(target.property) || { type: rhs.type, value: null };
+        const nextVal = coerceToType(applyOp(cur, rhs), cur.type);
+        inst.fields.set(target.property, nextVal);
+        return nextVal;
+      }
+      throw new JavaExceptionSignal(
+        { type: "object", value: null, className: "NullPointerException" },
+        `Cannot assign field "${target.property}" on null`,
+        "NullPointerException"
+      );
+    }
+    if (target.kind === "index") {
+      const arr = evalExpr(target.array, scope, thisObj, currentClass);
+      const idx = evalExpr(target.index, scope, thisObj, currentClass);
+      const i = Math.trunc(Number(idx.value));
+      if (arr.type === "array") {
+        const list = arr.value;
+        const cur = list[i];
+        const nextVal = applyOp(cur, rhs);
+        list[i] = nextVal;
+        return nextVal;
+      }
+    }
+    throw new Error("Main.java: error: invalid assignment target");
+  }
+  function evalBinary(op, l, r) {
+    if (op === "+") {
+      if (l.type === "String" || r.type === "String") {
+        return { type: "String", value: formatRuntimeVal(l) + formatRuntimeVal(r) };
+      }
+      const isDouble = l.type === "double" || l.type === "float" || r.type === "double" || r.type === "float";
+      const sum = Number(l.value) + Number(r.value);
+      return { type: isDouble ? "double" : "int", value: isDouble ? sum : Math.trunc(sum) };
+    }
+    if (op === "-") {
+      const isDouble = l.type === "double" || l.type === "float" || r.type === "double" || r.type === "float";
+      const diff = Number(l.value) - Number(r.value);
+      return { type: isDouble ? "double" : "int", value: isDouble ? diff : Math.trunc(diff) };
+    }
+    if (op === "*") {
+      const isDouble = l.type === "double" || l.type === "float" || r.type === "double" || r.type === "float";
+      const prod = Number(l.value) * Number(r.value);
+      return { type: isDouble ? "double" : "int", value: isDouble ? prod : Math.trunc(prod) };
+    }
+    if (op === "/") {
+      const isDouble = l.type === "double" || l.type === "float" || r.type === "double" || r.type === "float";
+      if (!isDouble && Number(r.value) === 0) {
+        throw new JavaExceptionSignal(
+          { type: "object", value: null, className: "ArithmeticException" },
+          "/ by zero",
+          "ArithmeticException"
+        );
+      }
+      const quot = Number(l.value) / Number(r.value);
+      return { type: isDouble ? "double" : "int", value: isDouble ? quot : Math.trunc(quot) };
+    }
+    if (op === "%") {
+      const isDouble = l.type === "double" || l.type === "float" || r.type === "double" || r.type === "float";
+      const rem = Number(l.value) % Number(r.value);
+      return { type: isDouble ? "double" : "int", value: isDouble ? rem : Math.trunc(rem) };
+    }
+    if (op === "==") return { type: "boolean", value: l.value === r.value };
+    if (op === "!=") return { type: "boolean", value: l.value !== r.value };
+    if (op === "<") return { type: "boolean", value: Number(l.value) < Number(r.value) };
+    if (op === "<=") return { type: "boolean", value: Number(l.value) <= Number(r.value) };
+    if (op === ">") return { type: "boolean", value: Number(l.value) > Number(r.value) };
+    if (op === ">=") return { type: "boolean", value: Number(l.value) >= Number(r.value) };
+    if (op === "&") return { type: "int", value: Number(l.value) & Number(r.value) };
+    if (op === "|") return { type: "int", value: Number(l.value) | Number(r.value) };
+    if (op === "^") return { type: "int", value: Number(l.value) ^ Number(r.value) };
+    if (op === "<<") return { type: "int", value: Number(l.value) << Number(r.value) };
+    if (op === ">>") return { type: "int", value: Number(l.value) >> Number(r.value) };
+    return { type: "int", value: 0 };
+  }
+  function evalExpr(expr, scope, thisObj, currentClass) {
+    switch (expr.kind) {
+      case "literal":
+        return expr.val;
+      case "this":
+        return { type: "object", value: thisObj, className: thisObj?.className || currentClass };
+      case "super":
+        return {
+          type: "superRef",
+          value: thisObj,
+          className: classMap.get(currentClass)?.superClass || "Object"
+        };
+      case "ident":
+        return resolveIdentifier(expr.name, scope, thisObj, currentClass);
+      case "binary": {
+        if (expr.op === "&&") {
+          const l2 = evalExpr(expr.left, scope, thisObj, currentClass);
+          if (!l2.value) return { type: "boolean", value: false };
+          const r2 = evalExpr(expr.right, scope, thisObj, currentClass);
+          return { type: "boolean", value: Boolean(r2.value) };
+        }
+        if (expr.op === "||") {
+          const l2 = evalExpr(expr.left, scope, thisObj, currentClass);
+          if (l2.value) return { type: "boolean", value: true };
+          const r2 = evalExpr(expr.right, scope, thisObj, currentClass);
+          return { type: "boolean", value: Boolean(r2.value) };
+        }
+        const l = evalExpr(expr.left, scope, thisObj, currentClass);
+        const r = evalExpr(expr.right, scope, thisObj, currentClass);
+        return evalBinary(expr.op, l, r);
+      }
+      case "unary": {
+        if (expr.op === "++" || expr.op === "--") {
+          const cur = evalExpr(expr.expr, scope, thisObj, currentClass);
+          const delta = expr.op === "++" ? 1 : -1;
+          const updated = {
+            type: cur.type,
+            value: cur.type === "double" ? Number(cur.value) + delta : Math.trunc(Number(cur.value)) + delta
+          };
+          assignTarget(expr.expr, "=", updated, scope, thisObj, currentClass);
+          return expr.prefix ? updated : cur;
+        }
+        const v = evalExpr(expr.expr, scope, thisObj, currentClass);
+        if (expr.op === "-") {
+          return { type: v.type, value: -Number(v.value) };
+        }
+        if (expr.op === "+") {
+          return { type: v.type, value: +Number(v.value) };
+        }
+        if (expr.op === "!") {
+          return { type: "boolean", value: !v.value };
+        }
+        return v;
+      }
+      case "ternary": {
+        const c = evalExpr(expr.cond, scope, thisObj, currentClass);
+        return c.value ? evalExpr(expr.thenExpr, scope, thisObj, currentClass) : evalExpr(expr.elseExpr, scope, thisObj, currentClass);
+      }
+      case "assign": {
+        const rhs = evalExpr(expr.value, scope, thisObj, currentClass);
+        return assignTarget(expr.target, expr.op, rhs, scope, thisObj, currentClass);
+      }
+      case "cast": {
+        const val = evalExpr(expr.expr, scope, thisObj, currentClass);
+        return coerceToType(val, expr.targetType);
+      }
+      case "instanceof": {
+        const val = evalExpr(expr.expr, scope, thisObj, currentClass);
+        if (val.type === "null" || !val.value) return { type: "boolean", value: false };
+        if (val.type === "String" && expr.targetType === "String") return { type: "boolean", value: true };
+        if (val.type === "object" && val.className) {
+          return { type: "boolean", value: isSubTypeOf(val.className, expr.targetType) };
+        }
+        return { type: "boolean", value: false };
+      }
+      case "member": {
+        const obj = evalExpr(expr.object, scope, thisObj, currentClass);
+        if (obj.type === "classRef") {
+          if (obj.value === "System" && (expr.property === "out" || expr.property === "err")) {
+            return { type: "systemOut", value: "System.out" };
+          }
+          if (obj.value === "Math" && expr.property === "PI") {
+            return { type: "double", value: Math.PI };
+          }
+          if (obj.value === "Integer" && expr.property === "MAX_VALUE") {
+            return { type: "int", value: 2147483647 };
+          }
+          if (obj.value === "Integer" && expr.property === "MIN_VALUE") {
+            return { type: "int", value: -2147483648 };
+          }
+          if (obj.value === "Double" && expr.property === "MAX_VALUE") {
+            return { type: "double", value: Number.MAX_VALUE };
+          }
+          const sf = findStaticField(obj.value, expr.property);
+          if (sf !== void 0) {
+            return sf;
+          }
+          const cDecl = classMap.get(obj.value);
+          if (cDecl && cDecl.kind === "enum" && cDecl.enumConstants?.includes(expr.property)) {
+            return { type: "String", value: expr.property, className: obj.value };
+          }
+        }
+        if (obj.type === "array" && expr.property === "length") {
+          return { type: "int", value: obj.value.length };
+        }
+        if ((obj.type === "object" || obj.type === "superRef") && obj.value) {
+          const inst = obj.value;
+          if (inst.fields.has(expr.property)) {
+            return inst.fields.get(expr.property);
+          }
+          const sf = findStaticField(inst.className, expr.property);
+          if (sf !== void 0) {
+            return sf;
+          }
+        }
+        throw new JavaExceptionSignal(
+          { type: "object", value: null, className: "NullPointerException" },
+          `Cannot read field "${expr.property}"`,
+          "NullPointerException"
+        );
+      }
+      case "index": {
+        const arr = evalExpr(expr.array, scope, thisObj, currentClass);
+        const idx = evalExpr(expr.index, scope, thisObj, currentClass);
+        const i = Math.trunc(Number(idx.value));
+        if (arr.type === "array") {
+          const list = arr.value;
+          if (i < 0 || i >= list.length) {
+            throw new JavaExceptionSignal(
+              { type: "object", value: null, className: "ArrayIndexOutOfBoundsException" },
+              `Index ${i} out of bounds for length ${list.length}`,
+              "ArrayIndexOutOfBoundsException"
+            );
+          }
+          return list[i];
+        }
+        return { type: "null", value: null };
+      }
+      case "newArray": {
+        if (expr.initValues) {
+          const vals2 = expr.initValues.map((e) => coerceToType(evalExpr(e, scope, thisObj, currentClass), expr.elemType));
+          return { type: "array", value: vals2 };
+        }
+        const len = expr.size ? Math.trunc(Number(evalExpr(expr.size, scope, thisObj, currentClass).value)) : 0;
+        const vals = Array.from({ length: len }, () => defaultForType(expr.elemType));
+        return { type: "array", value: vals };
+      }
+      case "new": {
+        const args = expr.args.map((a) => evalExpr(a, scope, thisObj, currentClass));
+        if (expr.className === "ArrayList" || expr.className === "LinkedList") {
+          if (args.length === 1 && (args[0].type === "list" || args[0].type === "set" || args[0].type === "array")) {
+            return { type: "list", value: [...args[0].value] };
+          }
+          return { type: "list", value: [] };
+        }
+        if (expr.className === "HashMap" || expr.className === "TreeMap" || expr.className === "LinkedHashMap") {
+          return { type: "map", value: /* @__PURE__ */ new Map() };
+        }
+        if (expr.className === "HashSet" || expr.className === "TreeSet" || expr.className === "LinkedHashSet") {
+          if (args.length === 1 && (args[0].type === "list" || args[0].type === "set" || args[0].type === "array")) {
+            return { type: "set", value: [...args[0].value] };
+          }
+          return { type: "set", value: [] };
+        }
+        if (expr.className === "StringBuilder") {
+          const initStr = args.length > 0 ? formatRuntimeVal(args[0]) : "";
+          return { type: "stringbuilder", value: { str: initStr } };
+        }
+        if (expr.className === "Date") {
+          return { type: "String", value: "2026-05-01", className: "Date" };
+        }
+        const instance = {
+          className: expr.className,
+          fields: /* @__PURE__ */ new Map()
+        };
+        initInstanceFields(instance, expr.className);
+        invokeConstructor(instance, expr.className, args);
+        return { type: "object", value: instance, className: expr.className };
+      }
+      case "call": {
+        const args = expr.args.map((a) => evalExpr(a, scope, thisObj, currentClass));
+        if (expr.callee.kind === "ident") {
+          const mName = expr.callee.name;
+          return invokeMethod(thisObj, thisObj?.className || currentClass, mName, args);
+        }
+        if (expr.callee.kind === "member") {
+          const targetObj = evalExpr(expr.callee.object, scope, thisObj, currentClass);
+          const mName = expr.callee.property;
+          if (targetObj.type === "systemOut") {
+            if (mName === "println") {
+              stdout += (args.length > 0 ? formatRuntimeVal(args[0]) : "") + "\n";
+              return { type: "void", value: void 0 };
+            }
+            if (mName === "print") {
+              stdout += args.length > 0 ? formatRuntimeVal(args[0]) : "";
+              return { type: "void", value: void 0 };
+            }
+            if (mName === "printf" || mName === "format") {
+              const fmt = args.length > 0 ? formatRuntimeVal(args[0]) : "";
+              stdout += formatPrintfString(fmt, args.slice(1));
+              return { type: "void", value: void 0 };
+            }
+          }
+          if (targetObj.type === "classRef") {
+            const cName = targetObj.value;
+            if (cName === "Math") {
+              if (mName === "max") return { type: args[0].type, value: Math.max(Number(args[0].value), Number(args[1].value)) };
+              if (mName === "min") return { type: args[0].type, value: Math.min(Number(args[0].value), Number(args[1].value)) };
+              if (mName === "abs") return { type: args[0].type, value: Math.abs(Number(args[0].value)) };
+              if (mName === "pow") return { type: "double", value: Math.pow(Number(args[0].value), Number(args[1].value)) };
+              if (mName === "sqrt") return { type: "double", value: Math.sqrt(Number(args[0].value)) };
+              if (mName === "round") return { type: "int", value: Math.round(Number(args[0].value)) };
+              if (mName === "ceil") return { type: "double", value: Math.ceil(Number(args[0].value)) };
+              if (mName === "floor") return { type: "double", value: Math.floor(Number(args[0].value)) };
+            }
+            if (cName === "Integer") {
+              if (mName === "parseInt") {
+                const v = parseInt(formatRuntimeVal(args[0]), 10);
+                if (Number.isNaN(v)) {
+                  throw new JavaExceptionSignal({ type: "object", value: null, className: "NumberFormatException" }, "Invalid int", "NumberFormatException");
+                }
+                return { type: "int", value: v };
+              }
+              if (mName === "valueOf") return { type: "int", value: parseInt(formatRuntimeVal(args[0]), 10) };
+              if (mName === "compare") {
+                const a = Number(args[0]?.value ?? 0);
+                const b = Number(args[1]?.value ?? 0);
+                return { type: "int", value: a < b ? -1 : a > b ? 1 : 0 };
+              }
+              if (mName === "toString") return { type: "String", value: String(Math.trunc(Number(args[0]?.value ?? 0))) };
+            }
+            if (cName === "Double") {
+              if (mName === "parseDouble") return { type: "double", value: parseFloat(formatRuntimeVal(args[0])) };
+              if (mName === "valueOf") return { type: "double", value: parseFloat(formatRuntimeVal(args[0])) };
+              if (mName === "isNaN") return { type: "boolean", value: Number.isNaN(Number(args[0]?.value)) };
+              if (mName === "isInfinite") return { type: "boolean", value: !Number.isFinite(Number(args[0]?.value)) };
+              if (mName === "compare") {
+                const a = Number(args[0]?.value ?? 0);
+                const b = Number(args[1]?.value ?? 0);
+                return { type: "int", value: a < b ? -1 : a > b ? 1 : 0 };
+              }
+              if (mName === "toString") return { type: "String", value: formatJavaVal(args[0]) };
+            }
+            if (cName === "Boolean") {
+              if (mName === "parseBoolean" || mName === "valueOf") {
+                return { type: "boolean", value: formatRuntimeVal(args[0]).toLowerCase() === "true" };
+              }
+            }
+            if (cName === "String") {
+              if (mName === "valueOf") {
+                return { type: "String", value: formatRuntimeVal(args[0]) };
+              }
+              if (mName === "format") {
+                const fmt = args.length > 0 ? formatRuntimeVal(args[0]) : "";
+                return { type: "String", value: formatPrintfString(fmt, args.slice(1)) };
+              }
+              if (mName === "join") {
+                const delim = formatRuntimeVal(args[0]);
+                if (args.length === 2 && (args[1].type === "list" || args[1].type === "array")) {
+                  return { type: "String", value: args[1].value.map((x) => formatRuntimeVal(x)).join(delim) };
+                }
+                return { type: "String", value: args.slice(1).map((x) => formatRuntimeVal(x)).join(delim) };
+              }
+            }
+            if (cName === "Arrays") {
+              if (mName === "toString") {
+                return { type: "String", value: formatRuntimeVal(args[0]) };
+              }
+              if (mName === "asList") {
+                return { type: "list", value: [...args] };
+              }
+            }
+            if (cName === "List") {
+              if (mName === "of") return { type: "list", value: [...args] };
+              if (mName === "copyOf" && args[0]?.value) return { type: "list", value: [...args[0].value] };
+            }
+            if (cName === "Set") {
+              if (mName === "of") return { type: "set", value: [...args] };
+              if (mName === "copyOf" && args[0]?.value) return { type: "set", value: [...args[0].value] };
+            }
+            if (cName === "Collections") {
+              if (mName === "unmodifiableList" || mName === "unmodifiableSet" || mName === "unmodifiableMap") {
+                return args[0];
+              }
+              if (mName === "emptyList") return { type: "list", value: [] };
+              if (mName === "emptySet") return { type: "set", value: [] };
+              if (mName === "emptyMap") return { type: "map", value: /* @__PURE__ */ new Map() };
+              if (mName === "singletonList") return { type: "list", value: [args[0]] };
+              if (mName === "singleton") return { type: "set", value: [args[0]] };
+              if (mName === "reverse" && args[0]?.type === "list") {
+                args[0].value.reverse();
+                return { type: "void", value: void 0 };
+              }
+              if (mName === "sort" && args[0]?.type === "list") {
+                args[0].value.sort(
+                  (a, b) => String(a.value).localeCompare(String(b.value), void 0, { numeric: true })
+                );
+                return { type: "void", value: void 0 };
+              }
+            }
+            if (cName === "LocalDate" || cName === "LocalDateTime") {
+              if (mName === "now") {
+                return { type: "String", value: "2026-05-01", className: cName };
+              }
+              if (mName === "of") {
+                const y = formatRuntimeVal(args[0]);
+                const m = String(args[1]?.value ?? 1).padStart(2, "0");
+                const d = String(args[2]?.value ?? 1).padStart(2, "0");
+                return { type: "String", value: `${y}-${m}-${d}`, className: cName };
+              }
+              if (mName === "parse") {
+                return { type: "String", value: formatRuntimeVal(args[0]), className: cName };
+              }
+            }
+            if (cName === "UUID" && mName === "randomUUID") {
+              return { type: "String", value: "UUID-1001", className: "UUID" };
+            }
+            if (cName === "Objects") {
+              if (mName === "requireNonNull") {
+                const target = args[0];
+                if (!target || target.type === "null" || target.value === null || target.value === void 0) {
+                  const errMsg = args.length > 1 ? formatRuntimeVal(args[1]) : "Object cannot be null";
+                  throw new JavaExceptionSignal(
+                    { type: "object", value: null, className: "NullPointerException" },
+                    errMsg,
+                    "NullPointerException"
+                  );
+                }
+                return target;
+              }
+              if (mName === "equals") {
+                return { type: "boolean", value: args[0]?.value === args[1]?.value };
+              }
+              if (mName === "nonNull") {
+                return { type: "boolean", value: !!args[0] && args[0].type !== "null" && args[0].value !== null };
+              }
+              if (mName === "isNull") {
+                return { type: "boolean", value: !args[0] || args[0].type === "null" || args[0].value === null };
+              }
+              if (mName === "hash" || mName === "hashCode") {
+                return { type: "int", value: 1 };
+              }
+              if (mName === "toString") {
+                if (!args[0] || args[0].type === "null" || args[0].value === null) {
+                  return { type: "String", value: args.length > 1 ? formatRuntimeVal(args[1]) : "null" };
+                }
+                return { type: "String", value: formatRuntimeVal(args[0]) };
+              }
+            }
+            const enumDecl = classMap.get(cName);
+            if (enumDecl && enumDecl.kind === "enum") {
+              if (mName === "values") {
+                return {
+                  type: "array",
+                  value: (enumDecl.enumConstants || []).map((ec) => ({ type: "String", value: ec, className: cName }))
+                };
+              }
+              if (mName === "valueOf" && args[0]) {
+                return { type: "String", value: formatRuntimeVal(args[0]), className: cName };
+              }
+            }
+            return invokeMethod(null, cName, mName, args);
+          }
+          if (targetObj.type === "superRef") {
+            return invokeMethod(targetObj.value, targetObj.className, mName, args);
+          }
+          if (targetObj.type === "classMeta") {
+            if (mName === "getSimpleName" || mName === "getName") {
+              return { type: "String", value: String(targetObj.value) };
+            }
+          }
+          if (targetObj.type === "String") {
+            const s = String(targetObj.value);
+            if (mName === "length") return { type: "int", value: s.length };
+            if (mName === "toUpperCase") return { type: "String", value: s.toUpperCase() };
+            if (mName === "toLowerCase") return { type: "String", value: s.toLowerCase() };
+            if (mName === "trim" || mName === "strip") return { type: "String", value: s.trim() };
+            if (mName === "isEmpty" || mName === "isBlank") return { type: "boolean", value: s.trim().length === 0 };
+            if (mName === "equals") return { type: "boolean", value: args[0]?.type === "String" && s === args[0].value };
+            if (mName === "equalsIgnoreCase") return { type: "boolean", value: args[0]?.type === "String" && s.toLowerCase() === String(args[0].value).toLowerCase() };
+            if (mName === "compareTo") return { type: "int", value: s.localeCompare(formatRuntimeVal(args[0])) };
+            if (mName === "contains") return { type: "boolean", value: s.includes(formatRuntimeVal(args[0])) };
+            if (mName === "startsWith") return { type: "boolean", value: s.startsWith(formatRuntimeVal(args[0])) };
+            if (mName === "endsWith") return { type: "boolean", value: s.endsWith(formatRuntimeVal(args[0])) };
+            if (mName === "matches") return { type: "boolean", value: new RegExp("^" + formatRuntimeVal(args[0]) + "$").test(s) };
+            if (mName === "formatted") return { type: "String", value: formatPrintfString(s, args) };
+            if (mName === "charAt") return { type: "char", value: s.charAt(Number(args[0].value)) };
+            if (mName === "indexOf") return { type: "int", value: s.indexOf(formatRuntimeVal(args[0])) };
+            if (mName === "substring") {
+              const start = Number(args[0].value);
+              const end = args.length > 1 ? Number(args[1].value) : void 0;
+              return { type: "String", value: s.substring(start, end) };
+            }
+            if (mName === "replace" || mName === "replaceAll") {
+              return { type: "String", value: s.replaceAll(formatRuntimeVal(args[0]), formatRuntimeVal(args[1])) };
+            }
+            if (mName === "split") {
+              const parts = s.split(new RegExp(formatRuntimeVal(args[0])));
+              return { type: "array", value: parts.map((p) => ({ type: "String", value: p })) };
+            }
+            if (mName === "isAfter") {
+              return { type: "boolean", value: s > formatRuntimeVal(args[0]) };
+            }
+            if (mName === "isBefore") {
+              return { type: "boolean", value: s < formatRuntimeVal(args[0]) };
+            }
+            if (mName === "isEqual") {
+              return { type: "boolean", value: s === formatRuntimeVal(args[0]) };
+            }
+            if (mName === "getYear") {
+              return { type: "int", value: parseInt(s.slice(0, 4), 10) || 2026 };
+            }
+            if (mName === "getMonthValue") {
+              return { type: "int", value: parseInt(s.slice(5, 7), 10) || 5 };
+            }
+            if (mName === "getMonth") {
+              return { type: "String", value: "MAY" };
+            }
+            if (mName === "getDayOfMonth") {
+              return { type: "int", value: parseInt(s.slice(8, 10), 10) || 1 };
+            }
+            if (mName === "plusDays") {
+              const dt = new Date(s);
+              dt.setDate(dt.getDate() + Number(args[0]?.value ?? 0));
+              return { type: "String", value: dt.toISOString().slice(0, 10), className: "LocalDate" };
+            }
+            if (mName === "minusDays") {
+              const dt = new Date(s);
+              dt.setDate(dt.getDate() - Number(args[0]?.value ?? 0));
+              return { type: "String", value: dt.toISOString().slice(0, 10), className: "LocalDate" };
+            }
+            if (mName === "name") return { type: "String", value: s };
+            if (mName === "hashCode") return { type: "int", value: 1 };
+            if (mName === "toString") return targetObj;
+            if (mName === "getClass") return { type: "classMeta", value: targetObj.className || "String" };
+          }
+          if (targetObj.type === "list") {
+            const list = targetObj.value;
+            if (mName === "add") {
+              if (args.length === 2) {
+                list.splice(Number(args[0].value), 0, args[1]);
+                return { type: "void", value: void 0 };
+              }
+              list.push(args[0]);
+              return { type: "boolean", value: true };
+            }
+            if (mName === "addAll" && args[0] && (args[0].type === "list" || args[0].type === "set" || args[0].type === "array")) {
+              list.push(...args[0].value);
+              return { type: "boolean", value: true };
+            }
+            if (mName === "get") {
+              const idx = Number(args[0].value);
+              if (idx < 0 || idx >= list.length) {
+                throw new JavaExceptionSignal({ type: "object", value: null, className: "IndexOutOfBoundsException" }, `Index ${idx} out of bounds`, "IndexOutOfBoundsException");
+              }
+              return list[idx];
+            }
+            if (mName === "set") {
+              const idx = Number(args[0].value);
+              const prev = list[idx];
+              list[idx] = args[1];
+              return prev;
+            }
+            if (mName === "remove") {
+              if (args[0].type === "int") {
+                const removed = list.splice(Number(args[0].value), 1);
+                return removed[0] || { type: "null", value: null };
+              }
+              const idx = list.findIndex((item) => item.value === args[0].value);
+              if (idx >= 0) {
+                list.splice(idx, 1);
+                return { type: "boolean", value: true };
+              }
+              return { type: "boolean", value: false };
+            }
+            if (mName === "size") return { type: "int", value: list.length };
+            if (mName === "isEmpty") return { type: "boolean", value: list.length === 0 };
+            if (mName === "contains") return { type: "boolean", value: list.some((x) => x.value === args[0].value) };
+            if (mName === "indexOf") return { type: "int", value: list.findIndex((x) => x.value === args[0].value) };
+            if (mName === "clear") {
+              list.length = 0;
+              return { type: "void", value: void 0 };
+            }
+            if (mName === "toString") return { type: "String", value: formatRuntimeVal(targetObj) };
+          }
+          if (targetObj.type === "set") {
+            const setList = targetObj.value;
+            if (mName === "add") {
+              const exists = setList.some((x) => x.value === args[0].value);
+              if (!exists) setList.push(args[0]);
+              return { type: "boolean", value: !exists };
+            }
+            if (mName === "contains") return { type: "boolean", value: setList.some((x) => x.value === args[0].value) };
+            if (mName === "remove") {
+              const idx = setList.findIndex((x) => x.value === args[0].value);
+              if (idx >= 0) setList.splice(idx, 1);
+              return { type: "boolean", value: idx >= 0 };
+            }
+            if (mName === "size") return { type: "int", value: setList.length };
+            if (mName === "isEmpty") return { type: "boolean", value: setList.length === 0 };
+            if (mName === "toString") return { type: "String", value: formatRuntimeVal(targetObj) };
+          }
+          if (targetObj.type === "map") {
+            const map = targetObj.value;
+            if (mName === "put") {
+              const kStr = formatRuntimeVal(args[0]);
+              map.set(kStr, { key: args[0], val: args[1] });
+              return args[1];
+            }
+            if (mName === "putIfAbsent") {
+              const kStr = formatRuntimeVal(args[0]);
+              if (!map.has(kStr)) {
+                map.set(kStr, { key: args[0], val: args[1] });
+                return { type: "null", value: null };
+              }
+              return map.get(kStr).val;
+            }
+            if (mName === "get") {
+              const kStr = formatRuntimeVal(args[0]);
+              const entry = map.get(kStr);
+              return entry ? entry.val : { type: "null", value: null };
+            }
+            if (mName === "getOrDefault") {
+              const kStr = formatRuntimeVal(args[0]);
+              const entry = map.get(kStr);
+              return entry ? entry.val : args[1];
+            }
+            if (mName === "containsKey") {
+              return { type: "boolean", value: map.has(formatRuntimeVal(args[0])) };
+            }
+            if (mName === "containsValue") {
+              return { type: "boolean", value: Array.from(map.values()).some((e) => e.val.value === args[0]?.value) };
+            }
+            if (mName === "remove") {
+              const kStr = formatRuntimeVal(args[0]);
+              const entry = map.get(kStr);
+              map.delete(kStr);
+              return entry ? entry.val : { type: "null", value: null };
+            }
+            if (mName === "size") return { type: "int", value: map.size };
+            if (mName === "isEmpty") return { type: "boolean", value: map.size === 0 };
+            if (mName === "keySet") {
+              return { type: "list", value: Array.from(map.values()).map((e) => e.key) };
+            }
+            if (mName === "values") {
+              return { type: "list", value: Array.from(map.values()).map((e) => e.val) };
+            }
+            if (mName === "toString") return { type: "String", value: formatRuntimeVal(targetObj) };
+          }
+          if (targetObj.type === "stringbuilder") {
+            if (mName === "append") {
+              targetObj.value.str += formatRuntimeVal(args[0]);
+              return targetObj;
+            }
+            if (mName === "toString") {
+              return { type: "String", value: targetObj.value.str };
+            }
+            if (mName === "length") {
+              return { type: "int", value: targetObj.value.str.length };
+            }
+          }
+          if (targetObj.type === "null" || !targetObj.value) {
+            throw new JavaExceptionSignal(
+              { type: "object", value: null, className: "NullPointerException" },
+              `Cannot invoke "${mName}" because target object is null`,
+              "NullPointerException"
+            );
+          }
+          if (targetObj.type === "object") {
+            const inst = targetObj.value;
+            if (mName === "getClass" && args.length === 0) {
+              return { type: "classMeta", value: inst.className };
+            }
+            if (mName === "printStackTrace" && args.length === 0) {
+              const msg = inst.fields.has("message") ? formatRuntimeVal(inst.fields.get("message")) : "";
+              stdout += `${inst.className}: ${msg}
+`;
+              return { type: "void", value: void 0 };
+            }
+            if (mName === "equals" && args.length === 1 && !findMethod(inst.className, "equals", args)) {
+              return { type: "boolean", value: inst === args[0]?.value };
+            }
+            return invokeMethod(inst, inst.className, mName, args);
+          }
+        }
+        throw new Error("Main.java: error: unsupported method call");
+      }
+    }
+  }
+  try {
+    for (const c of classes) {
+      const sf = staticFields.get(c.name);
+      const scope = new Scope();
+      for (const f of c.fields) {
+        if (f.modifiers.includes("static") || c.kind === "interface") {
+          const val = f.initExpr ? coerceToType(evalExpr(f.initExpr, scope, null, c.name), f.type) : defaultForType(f.type);
+          sf.set(f.name, val);
+        }
+      }
+    }
+    let entryClass = classMap.get("Main");
+    if (!entryClass || !entryClass.methods.some((m) => m.name === "main")) {
+      entryClass = classes.find((c) => c.methods.some((m) => m.name === "main"));
+    }
+    if (!entryClass) {
+      return {
+        success: false,
+        compilationError: "Error: Main method not found, please define:\n   public static void main(String[] args)",
+        runtimeError: null,
+        stdout: "",
+        stderr: "Error: Main method not found",
+        executionTimeMs: Date.now() - startTime
+      };
+    }
+    const mainMethod = entryClass.methods.find((m) => m.name === "main");
+    if (!mainMethod || !mainMethod.body) {
+      return {
+        success: false,
+        compilationError: "Error: Main method not found, please define the main method as:\n   public static void main(String[] args)",
+        runtimeError: null,
+        stdout: "",
+        stderr: "Error: Main method not found",
+        executionTimeMs: Date.now() - startTime
+      };
+    }
+    const mainScope = new Scope();
+    if (mainMethod.params.length > 0) {
+      mainScope.declare(mainMethod.params[0].name, { type: "array", value: [] });
+    }
+    try {
+      execBlock(mainMethod.body, mainScope, null, entryClass.name);
+    } catch (sig) {
+      if (!(sig instanceof ReturnSignal)) throw sig;
+    }
+    return {
+      success: true,
+      compilationError: null,
+      runtimeError: null,
+      stdout,
+      stderr: "",
+      executionTimeMs: Date.now() - startTime
+    };
+  } catch (err) {
+    if (err instanceof JavaExceptionSignal) {
+      const errMsg = `Exception in thread "main" java.lang.${err.exceptionType}: ${err.message}`;
+      return {
+        success: false,
+        compilationError: null,
+        runtimeError: errMsg,
+        stdout,
+        stderr: errMsg,
+        executionTimeMs: Date.now() - startTime
+      };
+    }
+    const msg = err instanceof Error ? err.message : "Compilation error";
+    return {
+      success: false,
+      compilationError: msg,
+      runtimeError: null,
+      stdout,
+      stderr: msg,
+      executionTimeMs: Date.now() - startTime
+    };
+  }
+}
+
+// api-src/index.ts
+function parseBody(req) {
+  if (req.body && typeof req.body === "object") {
+    return Promise.resolve(req.body);
+  }
+  if (typeof req.body === "string" && req.body.length > 0) {
+    try {
+      return Promise.resolve(JSON.parse(req.body));
+    } catch {
+      return Promise.resolve({});
+    }
+  }
+  return new Promise((resolve) => {
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += chunk;
+    });
+    req.on("end", () => {
+      try {
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch {
+        resolve({});
+      }
+    });
+    req.on("error", () => resolve({}));
+  });
+}
+function sendJson(res, status, payload) {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(payload));
+}
+async function runJavaWithGeminiFallback(code, startTime) {
+  let braceDepth = 0;
+  for (const ch of code) {
+    if (ch === "{") braceDepth++;
+    if (ch === "}") braceDepth--;
+  }
+  if (braceDepth !== 0) {
+    return {
+      success: false,
+      compilationError: "Main.java: error: reached end of file while parsing (unbalanced curly braces)",
+      runtimeError: null,
+      stdout: "",
+      stderr: "Main.java: error: reached end of file while parsing",
+      executionTimeMs: Date.now() - startTime
+    };
+  }
+  const astResult = executeJavaAST(code);
+  if (astResult.success || astResult.runtimeError) {
+    return {
+      ...astResult,
+      executionTimeMs: Date.now() - startTime
+    };
+  }
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (apiKey) {
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build"
+        }
+      }
+    });
+    for (const modelName of ["gemini-3.1-flash-lite", "gemini-3.8-flash"]) {
+      try {
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: `Act as an exact Java 21 compiler (javac) and JVM (java Main). Evaluate the following Main.java code and return ONLY valid JSON with fields:
+{
+  "compilationError": string | null,
+  "runtimeError": string | null,
+  "stdout": string
+}
+Do not wrap in markdown code blocks. Be 100% faithful to Java syntax, types, access modifiers, and standard output.
+
+Code:
+${code}`
+        });
+        if (response && response.text) {
+          const cleanJson = response.text.trim().replace(/^```json\s*/i, "").replace(/```$/, "").trim();
+          const parsed = JSON.parse(cleanJson);
+          const hasCompErr = !!parsed.compilationError;
+          const hasRunErr = !!parsed.runtimeError;
+          return {
+            success: !hasCompErr && !hasRunErr,
+            compilationError: parsed.compilationError || null,
+            runtimeError: parsed.runtimeError || null,
+            stdout: parsed.stdout || "",
+            stderr: parsed.compilationError || parsed.runtimeError || "",
+            executionTimeMs: Date.now() - startTime
+          };
+        }
+      } catch {
+      }
+    }
+  }
+  return {
+    ...astResult,
+    executionTimeMs: Date.now() - startTime
+  };
+}
+async function handler(req, res) {
+  const url = req.url || "";
+  const body = await parseBody(req);
+  const startTime = Date.now();
+  if (url.includes("/api/java/run")) {
+    const code = body?.code;
+    if (!code || typeof code !== "string") {
+      return sendJson(res, 400, { error: "Java code string is required" });
+    }
+    const result = await runJavaWithGeminiFallback(code, startTime);
+    return sendJson(res, 200, result);
+  }
+  if (url.includes("/api/java/test")) {
+    const code = body?.code;
+    const testCases = Array.isArray(body?.testCases) ? body.testCases : [];
+    if (!code || typeof code !== "string") {
+      return sendJson(res, 400, { error: "Code is required for test execution" });
+    }
+    const execResult = await runJavaWithGeminiFallback(code, startTime);
+    if (execResult.compilationError) {
+      return sendJson(res, 200, {
+        ...execResult,
+        testResults: [],
+        allTestsPassed: false
+      });
+    }
+    const normalizeOut = (s) => s.replace(/\r\n/g, "\n").split("\n").map((line) => line.trimEnd()).join("\n").trim();
+    const actualOutput = normalizeOut(execResult.stdout || "");
+    let allPassed = true;
+    const testResults = testCases.map((tc) => {
+      const expectedOutput = normalizeOut(tc.expectedOutput || "");
+      const passed = actualOutput === expectedOutput;
+      if (!passed) allPassed = false;
+      return {
+        testCaseId: tc.id,
+        description: tc.description,
+        passed,
+        input: tc.input || "",
+        expected: tc.isHidden ? "[HIDDEN TEST CASE]" : expectedOutput,
+        actual: tc.isHidden && !passed ? "[OUTPUT MISMATCH]" : actualOutput,
+        isHidden: !!tc.isHidden
+      };
+    });
+    if (testCases.length === 0) {
+      allPassed = execResult.success;
+    }
+    return sendJson(res, 200, {
+      ...execResult,
+      success: allPassed,
+      testResults,
+      allTestsPassed: allPassed
+    });
+  }
+  if (url.includes("/api/tutor/explain")) {
+    const { code, concept, question, errorLog } = body || {};
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (apiKey) {
+      try {
+        const ai = new GoogleGenAI({ apiKey });
+        const response = await ai.models.generateContent({
+          model: "gemini-3.1-flash-lite",
+          contents: `You are the Arcane Java Tutor in OOP Quest.
+Concept: "${concept || "Java OOP"}"
+Question: "${question || "Help fix this code"}"
+Errors: "${errorLog || "None"}"
+Code:
+${code || ""}`
+        });
+        if (response?.text) {
+          return sendJson(res, 200, { advice: response.text });
+        }
+      } catch {
+      }
+    }
+    return sendJson(res, 200, {
+      advice: `Focus on ${concept || "OOP"} principles: verify private fields, method signatures, class hierarchy, and constructor initialization.`
+    });
+  }
+  return sendJson(res, 200, { status: "ok" });
+}
+export {
+  handler as default
+};

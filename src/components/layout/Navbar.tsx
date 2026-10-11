@@ -25,8 +25,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           onClick={() => onNavigate('dashboard')}
           className="text-left group cursor-pointer focus:outline-none"
         >
-          <span className="font-display text-xl md:text-2xl font-bold tracking-tight text-white group-hover:text-indigo-400 transition-colors whitespace-nowrap shrink-0 flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-sm bg-indigo-500 rotate-45 inline-block" />
+          <span className="font-display text-xl md:text-2xl font-bold tracking-tight text-white group-hover:text-indigo-400 transition-colors whitespace-nowrap shrink-0">
             OOP QUEST
           </span>
         </button>

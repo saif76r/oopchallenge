@@ -26,9 +26,22 @@ export const INITIAL_USER_PROGRESS: UserProgress = {
   submissionHistory: [],
 };
 
+export function isLevelFullyCompleted(progress: UserProgress, levelId: number): boolean {
+  const level = CURRICULUM.find((l) => l.id === levelId);
+  if (!level) return false;
+  if (level.missions && level.missions.length > 0) {
+    const allMissionsDone = level.missions.every((m) =>
+      progress.completedMissionIds.includes(m.id)
+    );
+    if (!allMissionsDone) return false;
+  }
+  return progress.completedLevelIds.includes(levelId);
+}
+
 export function isEternalKingdomUnlocked(progress: UserProgress): boolean {
+  // Level 18 will not open unless Level 17 and all preceding levels are fully completed
   const allPrereqLevels = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
-  return allPrereqLevels.every((id) => progress.completedLevelIds.includes(id));
+  return allPrereqLevels.every((id) => isLevelFullyCompleted(progress, id));
 }
 
 export function getStoredProgress(): UserProgress {
@@ -37,20 +50,33 @@ export function getStoredProgress(): UserProgress {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return INITIAL_USER_PROGRESS;
     const parsed = JSON.parse(raw);
-    const completedLevelIds: number[] = parsed.completedLevelIds || [];
-    const allPrereqCompleted = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].every((id) =>
-      completedLevelIds.includes(id)
-    );
-    
-    // Level 18 is strictly locked unless ALL 17 levels have been completed
+    const completedMissionIds: string[] = parsed.completedMissionIds || [];
+
+    // Filter completedLevelIds to only levels where all missions were actually completed
+    const completedLevelIds: number[] = (parsed.completedLevelIds || []).filter((lvlId: number) => {
+      const lvl = CURRICULUM.find((l) => l.id === lvlId);
+      if (!lvl) return false;
+      return lvl.missions.every((m) => completedMissionIds.includes(m.id));
+    });
+
+    const tempProgress: UserProgress = {
+      ...INITIAL_USER_PROGRESS,
+      ...parsed,
+      completedMissionIds,
+      completedLevelIds,
+    };
+
+    const isUnlocked18 = isEternalKingdomUnlocked(tempProgress);
+
+    // Level 18 is strictly locked unless Level 17 and all preceding realms are fully completed
     let unlockedLevelIds: number[] = parsed.unlockedLevelIds || [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
-    if (allPrereqCompleted) {
+    if (isUnlocked18) {
       unlockedLevelIds = Array.from(new Set([...unlockedLevelIds, 18]));
     } else {
       unlockedLevelIds = unlockedLevelIds.filter((id: number) => id !== 18);
     }
 
-    return { ...INITIAL_USER_PROGRESS, ...parsed, completedLevelIds, unlockedLevelIds };
+    return { ...tempProgress, unlockedLevelIds };
   } catch {
     return INITIAL_USER_PROGRESS;
   }

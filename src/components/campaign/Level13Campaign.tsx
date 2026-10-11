@@ -28,6 +28,29 @@ export const Level13Campaign: React.FC<Level13CampaignProps> = ({
   onBackToMap,
 }) => {
   const checkpoint = progress.campaignCheckpoint;
+
+  if (!isEternalKingdomUnlocked(progress)) {
+    return (
+      <div className="max-w-xl mx-auto py-24 px-4 text-center space-y-6">
+        <div className="w-16 h-16 rounded-2xl bg-red-950/50 border border-red-500/40 flex items-center justify-center mx-auto text-red-400 shadow-xl">
+          <Lock className="w-8 h-8" />
+        </div>
+        <h2 className="text-2xl font-display font-bold text-white">
+          The Celestial Throne is Sealed
+        </h2>
+        <p className="text-sm text-slate-300 leading-relaxed max-w-md mx-auto">
+          Level 18 remains sealed until Level 17 (The Master Trials) is fully completed. Complete all missions and trials across previous realms to breach the barrier.
+        </p>
+        <button
+          onClick={onBackToMap}
+          className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-semibold transition-colors cursor-pointer shadow-lg shadow-indigo-950"
+        >
+          Return to Adventure Map
+        </button>
+      </div>
+    );
+  }
+
   const [currentStage, setCurrentStage] = useState<number>(checkpoint.stage || 1);
   const [bossHp, setBossHp] = useState<number>(checkpoint.bossHealthRemaining ?? 1500);
   const [isDragonDefeated, setIsDragonDefeated] = useState<boolean>(checkpoint.dragonDefeated ?? false);

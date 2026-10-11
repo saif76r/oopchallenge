@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { UserProgress, Level, Mission, Achievement } from './types';
 import { CURRICULUM } from './content/curriculum';
 import { 
-  getStoredProgress, recordMissionCompletion, saveProgressLocally 
+  getStoredProgress, recordMissionCompletion, saveProgressLocally, isEternalKingdomUnlocked 
 } from './services/storage';
 
 // Components
@@ -71,6 +71,10 @@ export default function App() {
 
   // Navigation helpers
   const handleSelectLevel = (level: Level) => {
+    if (level.id === 18 && !isEternalKingdomUnlocked(progress)) {
+      setActiveTab('map');
+      return;
+    }
     setActiveLevel(level);
     if (level.id === 18) {
       setActiveTab('campaign');
@@ -84,6 +88,10 @@ export default function App() {
   };
 
   const handleSelectMission = (level: Level, missionId: string) => {
+    if (level.id === 18 && !isEternalKingdomUnlocked(progress)) {
+      setActiveTab('map');
+      return;
+    }
     setActiveLevel(level);
     const mission = level.missions.find((m) => m.id === missionId);
     if (mission) {
@@ -177,13 +185,33 @@ export default function App() {
         {activeTab === 'arena' && renderArenaOrMode()}
 
         {activeTab === 'campaign' && (
-          <Level13Campaign
-            level={CURRICULUM.find((l) => l.id === 18) || CURRICULUM[CURRICULUM.length - 1]}
-            progress={progress}
-            onUpdateProgress={handleUpdateProgress}
-            onOpenTutor={handleOpenTutorWithCode}
-            onBackToMap={() => setActiveTab('map')}
-          />
+          isEternalKingdomUnlocked(progress) ? (
+            <Level13Campaign
+              level={CURRICULUM.find((l) => l.id === 18) || CURRICULUM[CURRICULUM.length - 1]}
+              progress={progress}
+              onUpdateProgress={handleUpdateProgress}
+              onOpenTutor={handleOpenTutorWithCode}
+              onBackToMap={() => setActiveTab('map')}
+            />
+          ) : (
+            <div className="max-w-xl mx-auto py-24 px-4 text-center space-y-6">
+              <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400">
+                <Trophy className="w-8 h-8 text-amber-400" />
+              </div>
+              <h2 className="text-2xl font-display font-bold text-white">
+                The Eternal Kingdom is Sealed
+              </h2>
+              <p className="text-sm text-slate-300 leading-relaxed max-w-md mx-auto">
+                Level 18 opens only when Level 17 (The Master Trials) and all preceding realms are fully completed. Complete all missions and trials across previous realms to breach the barrier.
+              </p>
+              <button
+                onClick={() => setActiveTab('map')}
+                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-semibold transition-colors cursor-pointer shadow-lg shadow-indigo-950"
+              >
+                Return to Adventure Map
+              </button>
+            </div>
+          )
         )}
 
         {activeTab === 'achievements' && (

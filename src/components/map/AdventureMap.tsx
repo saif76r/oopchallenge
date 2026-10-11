@@ -188,11 +188,20 @@ export const AdventureMap: React.FC<AdventureMapProps> = ({
             <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
               {selectedLevel.missions.map((m) => {
                 const isDone = progress.completedMissionIds.includes(m.id);
+                const isLevelLocked = getStatus(selectedLevel) === 'LOCKED';
                 return (
                   <div
                     key={m.id}
-                    onClick={() => onSelectMission(selectedLevel, m.id)}
-                    className="flex items-center justify-between p-2.5 rounded-md bg-slate-900/60 border border-slate-800/80 hover:border-slate-700 hover:bg-slate-800/50 transition-colors cursor-pointer text-xs"
+                    onClick={() => {
+                      if (!isLevelLocked) {
+                        onSelectMission(selectedLevel, m.id);
+                      }
+                    }}
+                    className={`flex items-center justify-between p-2.5 rounded-md border text-xs transition-colors ${
+                      isLevelLocked
+                        ? 'bg-slate-900/30 border-slate-900 text-slate-500 cursor-not-allowed opacity-60'
+                        : 'bg-slate-900/60 border-slate-800/80 hover:border-slate-700 hover:bg-slate-800/50 cursor-pointer'
+                    }`}
                   >
                     <div className="flex items-center gap-2.5">
                       {isDone ? (
@@ -225,7 +234,7 @@ export const AdventureMap: React.FC<AdventureMapProps> = ({
                   </span>
                   <span className="text-slate-300 block leading-relaxed">
                     {selectedLevel.id === 18
-                      ? `Complete all 17 realms in Olympia to shatter the Cosmic Barrier and unlock the final campaign (${progress.completedLevelIds.filter((id) => id < 18).length} / 17 Completed).`
+                      ? `Level 18 remains strictly sealed until Level 17 (The Master Trials) and all preceding realms are fully completed (${progress.completedLevelIds.filter((id) => id < 18).length} / 17 Completed).`
                       : `Clear Level ${selectedLevel.id - 1} to unlock this realm.`}
                   </span>
                 </div>

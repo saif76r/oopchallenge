@@ -575,11 +575,11 @@ export const CodingArena: React.FC<CodingArenaProps> = ({
                 <Code className="w-3.5 h-3.5 text-indigo-400" />
                 <span>Main.java</span>
               </span>
-              <span className="text-[11px] text-purple-400 font-mono hidden sm:inline">
-                {!isBossMode && activeMission?.mode === 'predict_output'
-                  ? 'Output Prediction Trial'
-                  : '(OpenJDK 17 Target)'}
-              </span>
+              {!isBossMode && activeMission?.mode === 'predict_output' && (
+                <span className="text-[11px] text-purple-400 font-mono hidden sm:inline">
+                  Output Prediction Trial
+                </span>
+              )}
             </div>
 
             <div className="flex items-center gap-3 text-[11px] text-slate-300 font-mono">
@@ -605,7 +605,6 @@ export const CodingArena: React.FC<CodingArenaProps> = ({
               <div className="p-3.5 bg-[#05070d]/55 border border-slate-800/80 rounded-lg font-mono text-xs text-slate-200 overflow-x-auto max-h-[240px]">
                 <div className="text-slate-400 text-[10px] uppercase tracking-wider mb-1.5 font-sans font-semibold flex items-center justify-between">
                   <span>// Java Code Under Execution:</span>
-                  <span className="text-slate-500 font-mono">OpenJDK 17 Target</span>
                 </div>
                 <pre className="whitespace-pre leading-relaxed font-mono text-slate-100">
                   {code}

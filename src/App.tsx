@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { Analytics } from '@vercel/analytics/react';
 import { UserProgress, Level, Mission, Achievement } from './types';
 import { CURRICULUM } from './content/curriculum';
 import { 
@@ -238,8 +237,6 @@ export default function App() {
       {/* Footer */}
       <Footer />
 
-      {/* Vercel Web Analytics */}
-      <Analytics />
     </div>
   );
 }

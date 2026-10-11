@@ -1241,17 +1241,6 @@ function formatJavaVal(val: JavaVal): string {
 export function executeJavaAST(code: string): JavaRunOutput {
   const startTime = Date.now();
 
-  if (!code.includes('class Main')) {
-    return {
-      success: false,
-      compilationError: 'Main.java:1: error: class Main is public, should be declared in a file named Main.java',
-      runtimeError: null,
-      stdout: '',
-      stderr: 'Main.java:1: error: class Main is missing',
-      executionTimeMs: Date.now() - startTime,
-    };
-  }
-
   let braceDepth = 0;
   for (const ch of code) {
     if (ch === '{') braceDepth++;
@@ -1294,7 +1283,51 @@ export function executeJavaAST(code: string): JavaRunOutput {
 
   let stdout = '';
   let stepCount = 0;
-  const MAX_STEPS = 50000;
+  const MAX_STEPS = 100000;
+
+  function formatRuntimeVal(val: JavaVal): string {
+    if (!val || val.type === 'null' || val.value === null || val.value === undefined) {
+      return 'null';
+    }
+    if (val.type === 'object' && val.value) {
+      const inst = val.value as JavaInstance;
+      const toStr = findMethod(inst.className, 'toString', []);
+      if (toStr && toStr.decl.body) {
+        const res = invokeMethod(inst, inst.className, 'toString', []);
+        return formatJavaVal(res);
+      }
+      if (inst.fields.has('message')) {
+        return `${inst.className}: ${formatJavaVal(inst.fields.get('message')!)}`;
+      }
+      return `${inst.className}@1`;
+    }
+    return formatJavaVal(val);
+  }
+
+  function formatPrintfString(fmt: string, fmtArgs: JavaVal[]): string {
+    let argIdx = 0;
+    return fmt.replace(/%(-?\d+)?(\.\d+)?[sdfbn%]/g, (spec) => {
+      if (spec === '%%') return '%';
+      if (spec === '%n') return '\n';
+      const a = fmtArgs[argIdx++];
+      if (!a) return '';
+      if (spec.endsWith('f')) {
+        const dotMatch = spec.match(/\.(\d+)f$/);
+        if (dotMatch) {
+          const digits = parseInt(dotMatch[1], 10);
+          return Number(a.value).toFixed(digits);
+        }
+        return String(Number(a.value));
+      }
+      if (spec.endsWith('d')) {
+        return String(Math.trunc(Number(a.value)));
+      }
+      if (spec.endsWith('b')) {
+        return a.value ? 'true' : 'false';
+      }
+      return formatRuntimeVal(a);
+    });
+  }
 
   function checkStep() {
     stepCount++;
@@ -1715,6 +1748,22 @@ export function executeJavaAST(code: string): JavaRunOutput {
     }
   }
 
+  function findStaticField(className: string, fieldName: string): JavaVal | undefined {
+    let curr: string | null = className;
+    while (curr) {
+      const sf = staticFields.get(curr);
+      if (sf && sf.has(fieldName)) return sf.get(fieldName);
+      const cDecl = classMap.get(curr);
+      if (!cDecl) break;
+      for (const iface of cDecl.interfaces) {
+        const isf = staticFields.get(iface);
+        if (isf && isf.has(fieldName)) return isf.get(fieldName);
+      }
+      curr = cDecl.superClass;
+    }
+    return undefined;
+  }
+
   function resolveIdentifier(name: string, scope: Scope, thisObj: JavaInstance | null, currentClass: string): JavaVal {
     const local = scope.get(name);
     if (local !== undefined) return local;
@@ -1723,13 +1772,16 @@ export function executeJavaAST(code: string): JavaRunOutput {
       return thisObj.fields.get(name)!;
     }
 
-    const sf = staticFields.get(currentClass);
-    if (sf && sf.has(name)) {
-      return sf.get(name)!;
+    const staticVal = findStaticField(thisObj?.className || currentClass, name) ?? findStaticField(currentClass, name);
+    if (staticVal !== undefined) {
+      return staticVal;
     }
 
-    // Could be a class name reference (e.g., System, Math, Integer, or user class)
-    if (classMap.has(name) || ['System', 'Math', 'Integer', 'Double', 'Boolean', 'String', 'Arrays', 'Collections'].includes(name)) {
+    // Could be a class name reference (e.g., System, Math, Integer, LocalDate, or user class)
+    if (
+      classMap.has(name) ||
+      ['System', 'Math', 'Integer', 'Double', 'Boolean', 'String', 'Arrays', 'Collections', 'List', 'Set', 'Map', 'LocalDate', 'LocalDateTime', 'UUID', 'Objects'].includes(name)
+    ) {
       return { type: 'classRef', value: name };
     }
 
@@ -1763,12 +1815,16 @@ export function executeJavaAST(code: string): JavaRunOutput {
         thisObj.fields.set(target.name, nextVal);
         return nextVal;
       }
-      const sf = staticFields.get(currentClass);
-      if (sf && sf.has(target.name)) {
-        const cur = sf.get(target.name)!;
-        const nextVal = coerceToType(applyOp(cur, rhs), cur.type);
-        sf.set(target.name, nextVal);
-        return nextVal;
+      let curr: string | null = currentClass;
+      while (curr) {
+        const sf = staticFields.get(curr);
+        if (sf && sf.has(target.name)) {
+          const cur = sf.get(target.name)!;
+          const nextVal = coerceToType(applyOp(cur, rhs), cur.type);
+          sf.set(target.name, nextVal);
+          return nextVal;
+        }
+        curr = classMap.get(curr)?.superClass || null;
       }
       throw new Error(`Main.java: error: cannot find symbol variable ${target.name}`);
     }
@@ -1784,7 +1840,7 @@ export function executeJavaAST(code: string): JavaRunOutput {
           return nextVal;
         }
       }
-      if (obj.type === 'object' && obj.value) {
+      if ((obj.type === 'object' || obj.type === 'superRef') && obj.value) {
         const inst = obj.value as JavaInstance;
         const cur = inst.fields.get(target.property) || { type: rhs.type, value: null };
         const nextVal = coerceToType(applyOp(cur, rhs), cur.type);
@@ -1817,7 +1873,7 @@ export function executeJavaAST(code: string): JavaRunOutput {
   function evalBinary(op: string, l: JavaVal, r: JavaVal): JavaVal {
     if (op === '+') {
       if (l.type === 'String' || r.type === 'String') {
-        return { type: 'String', value: formatJavaVal(l) + formatJavaVal(r) };
+        return { type: 'String', value: formatRuntimeVal(l) + formatRuntimeVal(r) };
       }
       const isDouble = l.type === 'double' || l.type === 'float' || r.type === 'double' || r.type === 'float';
       const sum = Number(l.value) + Number(r.value);
@@ -1954,7 +2010,7 @@ export function executeJavaAST(code: string): JavaRunOutput {
       case 'member': {
         const obj = evalExpr(expr.object, scope, thisObj, currentClass);
         if (obj.type === 'classRef') {
-          if (obj.value === 'System' && expr.property === 'out') {
+          if (obj.value === 'System' && (expr.property === 'out' || expr.property === 'err')) {
             return { type: 'systemOut', value: 'System.out' };
           }
           if (obj.value === 'Math' && expr.property === 'PI') {
@@ -1966,9 +2022,12 @@ export function executeJavaAST(code: string): JavaRunOutput {
           if (obj.value === 'Integer' && expr.property === 'MIN_VALUE') {
             return { type: 'int', value: -2147483648 };
           }
-          const sf = staticFields.get(obj.value);
-          if (sf && sf.has(expr.property)) {
-            return sf.get(expr.property)!;
+          if (obj.value === 'Double' && expr.property === 'MAX_VALUE') {
+            return { type: 'double', value: Number.MAX_VALUE };
+          }
+          const sf = findStaticField(obj.value, expr.property);
+          if (sf !== undefined) {
+            return sf;
           }
           const cDecl = classMap.get(obj.value);
           if (cDecl && cDecl.kind === 'enum' && cDecl.enumConstants?.includes(expr.property)) {
@@ -1978,10 +2037,14 @@ export function executeJavaAST(code: string): JavaRunOutput {
         if (obj.type === 'array' && expr.property === 'length') {
           return { type: 'int', value: (obj.value as JavaVal[]).length };
         }
-        if (obj.type === 'object' && obj.value) {
+        if ((obj.type === 'object' || obj.type === 'superRef') && obj.value) {
           const inst = obj.value as JavaInstance;
           if (inst.fields.has(expr.property)) {
             return inst.fields.get(expr.property)!;
+          }
+          const sf = findStaticField(inst.className, expr.property);
+          if (sf !== undefined) {
+            return sf;
           }
         }
         throw new JavaExceptionSignal(
@@ -2022,17 +2085,26 @@ export function executeJavaAST(code: string): JavaRunOutput {
       case 'new': {
         const args = expr.args.map((a) => evalExpr(a, scope, thisObj, currentClass));
         if (expr.className === 'ArrayList' || expr.className === 'LinkedList') {
+          if (args.length === 1 && (args[0].type === 'list' || args[0].type === 'set' || args[0].type === 'array')) {
+            return { type: 'list', value: [...(args[0].value as JavaVal[])] };
+          }
           return { type: 'list', value: [] as JavaVal[] };
         }
         if (expr.className === 'HashMap' || expr.className === 'TreeMap' || expr.className === 'LinkedHashMap') {
           return { type: 'map', value: new Map<string, { key: JavaVal; val: JavaVal }>() };
         }
         if (expr.className === 'HashSet' || expr.className === 'TreeSet' || expr.className === 'LinkedHashSet') {
+          if (args.length === 1 && (args[0].type === 'list' || args[0].type === 'set' || args[0].type === 'array')) {
+            return { type: 'set', value: [...(args[0].value as JavaVal[])] };
+          }
           return { type: 'set', value: [] as JavaVal[] };
         }
         if (expr.className === 'StringBuilder') {
-          const initStr = args.length > 0 ? formatJavaVal(args[0]) : '';
+          const initStr = args.length > 0 ? formatRuntimeVal(args[0]) : '';
           return { type: 'stringbuilder', value: { str: initStr } };
+        }
+        if (expr.className === 'Date') {
+          return { type: 'String', value: '2026-05-01', className: 'Date' };
         }
 
         const instance: JavaInstance = {
@@ -2059,32 +2131,21 @@ export function executeJavaAST(code: string): JavaRunOutput {
           // System.out.println / print / printf
           if (targetObj.type === 'systemOut') {
             if (mName === 'println') {
-              stdout += (args.length > 0 ? formatJavaVal(args[0]) : '') + '\n';
+              stdout += (args.length > 0 ? formatRuntimeVal(args[0]) : '') + '\n';
               return { type: 'void', value: undefined };
             }
             if (mName === 'print') {
-              stdout += args.length > 0 ? formatJavaVal(args[0]) : '';
+              stdout += args.length > 0 ? formatRuntimeVal(args[0]) : '';
               return { type: 'void', value: undefined };
             }
-            if (mName === 'printf') {
-              let fmt = args.length > 0 ? formatJavaVal(args[0]) : '';
-              let argIdx = 1;
-              fmt = fmt.replace(/%(\.\d+)?[sdfn]/g, (spec) => {
-                if (spec === '%n') return '\n';
-                const a = args[argIdx++];
-                if (!a) return '';
-                if (spec.endsWith('f') && spec.startsWith('%.')) {
-                  const digits = parseInt(spec.slice(2, -1), 10);
-                  return Number(a.value).toFixed(digits);
-                }
-                return formatJavaVal(a);
-              });
-              stdout += fmt;
+            if (mName === 'printf' || mName === 'format') {
+              const fmt = args.length > 0 ? formatRuntimeVal(args[0]) : '';
+              stdout += formatPrintfString(fmt, args.slice(1));
               return { type: 'void', value: undefined };
             }
           }
 
-          // Static class calls: Math.*, Integer.*, Double.*, String.*, Arrays.*
+          // Static class calls: Math.*, Integer.*, Double.*, String.*, Arrays.*, Collections.*, LocalDate.*, List.*, Set.*
           if (targetObj.type === 'classRef') {
             const cName = targetObj.value as string;
             if (cName === 'Math') {
@@ -2094,22 +2155,86 @@ export function executeJavaAST(code: string): JavaRunOutput {
               if (mName === 'pow') return { type: 'double', value: Math.pow(Number(args[0].value), Number(args[1].value)) };
               if (mName === 'sqrt') return { type: 'double', value: Math.sqrt(Number(args[0].value)) };
               if (mName === 'round') return { type: 'int', value: Math.round(Number(args[0].value)) };
+              if (mName === 'ceil') return { type: 'double', value: Math.ceil(Number(args[0].value)) };
+              if (mName === 'floor') return { type: 'double', value: Math.floor(Number(args[0].value)) };
             }
             if (cName === 'Integer' && mName === 'parseInt') {
-              const v = parseInt(formatJavaVal(args[0]), 10);
+              const v = parseInt(formatRuntimeVal(args[0]), 10);
               if (Number.isNaN(v)) {
                 throw new JavaExceptionSignal({ type: 'object', value: null, className: 'NumberFormatException' }, 'Invalid int', 'NumberFormatException');
               }
               return { type: 'int', value: v };
             }
             if (cName === 'Double' && mName === 'parseDouble') {
-              return { type: 'double', value: parseFloat(formatJavaVal(args[0])) };
+              return { type: 'double', value: parseFloat(formatRuntimeVal(args[0])) };
             }
-            if (cName === 'String' && mName === 'valueOf') {
-              return { type: 'String', value: formatJavaVal(args[0]) };
+            if (cName === 'String') {
+              if (mName === 'valueOf') {
+                return { type: 'String', value: formatRuntimeVal(args[0]) };
+              }
+              if (mName === 'format') {
+                const fmt = args.length > 0 ? formatRuntimeVal(args[0]) : '';
+                return { type: 'String', value: formatPrintfString(fmt, args.slice(1)) };
+              }
+              if (mName === 'join') {
+                const delim = formatRuntimeVal(args[0]);
+                if (args.length === 2 && (args[1].type === 'list' || args[1].type === 'array')) {
+                  return { type: 'String', value: (args[1].value as JavaVal[]).map((x) => formatRuntimeVal(x)).join(delim) };
+                }
+                return { type: 'String', value: args.slice(1).map((x) => formatRuntimeVal(x)).join(delim) };
+              }
             }
-            if (cName === 'Arrays' && mName === 'toString') {
-              return { type: 'String', value: formatJavaVal(args[0]) };
+            if (cName === 'Arrays') {
+              if (mName === 'toString') {
+                return { type: 'String', value: formatRuntimeVal(args[0]) };
+              }
+              if (mName === 'asList') {
+                return { type: 'list', value: [...args] };
+              }
+            }
+            if (cName === 'List' && mName === 'of') {
+              return { type: 'list', value: [...args] };
+            }
+            if (cName === 'Set' && mName === 'of') {
+              return { type: 'set', value: [...args] };
+            }
+            if (cName === 'Collections') {
+              if (mName === 'unmodifiableList' || mName === 'unmodifiableSet') {
+                return args[0];
+              }
+              if (mName === 'emptyList') {
+                return { type: 'list', value: [] };
+              }
+              if (mName === 'reverse' && args[0]?.type === 'list') {
+                (args[0].value as JavaVal[]).reverse();
+                return { type: 'void', value: undefined };
+              }
+              if (mName === 'sort' && args[0]?.type === 'list') {
+                (args[0].value as JavaVal[]).sort((a, b) =>
+                  String(a.value).localeCompare(String(b.value), undefined, { numeric: true })
+                );
+                return { type: 'void', value: undefined };
+              }
+            }
+            if (cName === 'LocalDate' || cName === 'LocalDateTime') {
+              if (mName === 'now') {
+                return { type: 'String', value: '2026-05-01', className: cName };
+              }
+              if (mName === 'of') {
+                const y = formatRuntimeVal(args[0]);
+                const m = String(args[1]?.value ?? 1).padStart(2, '0');
+                const d = String(args[2]?.value ?? 1).padStart(2, '0');
+                return { type: 'String', value: `${y}-${m}-${d}`, className: cName };
+              }
+              if (mName === 'parse') {
+                return { type: 'String', value: formatRuntimeVal(args[0]), className: cName };
+              }
+            }
+            if (cName === 'UUID' && mName === 'randomUUID') {
+              return { type: 'String', value: 'UUID-1001', className: 'UUID' };
+            }
+            if (cName === 'Objects' && mName === 'equals') {
+              return { type: 'boolean', value: args[0]?.value === args[1]?.value };
             }
             return invokeMethod(null, cName, mName, args);
           }
@@ -2119,30 +2244,63 @@ export function executeJavaAST(code: string): JavaRunOutput {
             return invokeMethod(targetObj.value as JavaInstance, targetObj.className!, mName, args);
           }
 
-          // Built-in String methods
+          // Class reflection object (.getClass().getSimpleName() / .getName())
+          if (targetObj.type === 'classMeta') {
+            if (mName === 'getSimpleName' || mName === 'getName') {
+              return { type: 'String', value: String(targetObj.value) };
+            }
+          }
+
+          // Built-in String & LocalDate methods
           if (targetObj.type === 'String') {
             const s = String(targetObj.value);
             if (mName === 'length') return { type: 'int', value: s.length };
             if (mName === 'toUpperCase') return { type: 'String', value: s.toUpperCase() };
             if (mName === 'toLowerCase') return { type: 'String', value: s.toLowerCase() };
             if (mName === 'trim') return { type: 'String', value: s.trim() };
-            if (mName === 'isEmpty') return { type: 'boolean', value: s.length === 0 };
+            if (mName === 'isEmpty' || mName === 'isBlank') return { type: 'boolean', value: s.trim().length === 0 };
             if (mName === 'equals') return { type: 'boolean', value: args[0]?.type === 'String' && s === args[0].value };
             if (mName === 'equalsIgnoreCase') return { type: 'boolean', value: args[0]?.type === 'String' && s.toLowerCase() === String(args[0].value).toLowerCase() };
-            if (mName === 'contains') return { type: 'boolean', value: s.includes(formatJavaVal(args[0])) };
-            if (mName === 'startsWith') return { type: 'boolean', value: s.startsWith(formatJavaVal(args[0])) };
-            if (mName === 'endsWith') return { type: 'boolean', value: s.endsWith(formatJavaVal(args[0])) };
+            if (mName === 'compareTo') return { type: 'int', value: s.localeCompare(formatRuntimeVal(args[0])) };
+            if (mName === 'contains') return { type: 'boolean', value: s.includes(formatRuntimeVal(args[0])) };
+            if (mName === 'startsWith') return { type: 'boolean', value: s.startsWith(formatRuntimeVal(args[0])) };
+            if (mName === 'endsWith') return { type: 'boolean', value: s.endsWith(formatRuntimeVal(args[0])) };
             if (mName === 'charAt') return { type: 'char', value: s.charAt(Number(args[0].value)) };
-            if (mName === 'indexOf') return { type: 'int', value: s.indexOf(formatJavaVal(args[0])) };
+            if (mName === 'indexOf') return { type: 'int', value: s.indexOf(formatRuntimeVal(args[0])) };
             if (mName === 'substring') {
               const start = Number(args[0].value);
               const end = args.length > 1 ? Number(args[1].value) : undefined;
               return { type: 'String', value: s.substring(start, end) };
             }
-            if (mName === 'replace') {
-              return { type: 'String', value: s.replaceAll(formatJavaVal(args[0]), formatJavaVal(args[1])) };
+            if (mName === 'replace' || mName === 'replaceAll') {
+              return { type: 'String', value: s.replaceAll(formatRuntimeVal(args[0]), formatRuntimeVal(args[1])) };
+            }
+            if (mName === 'split') {
+              const parts = s.split(new RegExp(formatRuntimeVal(args[0])));
+              return { type: 'array', value: parts.map((p) => ({ type: 'String', value: p })) };
+            }
+            // LocalDate comparison methods (isAfter, isBefore, isEqual, plusDays, minusDays)
+            if (mName === 'isAfter') {
+              return { type: 'boolean', value: s > formatRuntimeVal(args[0]) };
+            }
+            if (mName === 'isBefore') {
+              return { type: 'boolean', value: s < formatRuntimeVal(args[0]) };
+            }
+            if (mName === 'isEqual') {
+              return { type: 'boolean', value: s === formatRuntimeVal(args[0]) };
+            }
+            if (mName === 'plusDays') {
+              const dt = new Date(s);
+              dt.setDate(dt.getDate() + Number(args[0]?.value ?? 0));
+              return { type: 'String', value: dt.toISOString().slice(0, 10), className: 'LocalDate' };
+            }
+            if (mName === 'minusDays') {
+              const dt = new Date(s);
+              dt.setDate(dt.getDate() - Number(args[0]?.value ?? 0));
+              return { type: 'String', value: dt.toISOString().slice(0, 10), className: 'LocalDate' };
             }
             if (mName === 'toString') return targetObj;
+            if (mName === 'getClass') return { type: 'classMeta', value: targetObj.className || 'String' };
           }
 
           // Built-in List / ArrayList methods
@@ -2154,6 +2312,10 @@ export function executeJavaAST(code: string): JavaRunOutput {
                 return { type: 'void', value: undefined };
               }
               list.push(args[0]);
+              return { type: 'boolean', value: true };
+            }
+            if (mName === 'addAll' && args[0] && (args[0].type === 'list' || args[0].type === 'set' || args[0].type === 'array')) {
+              list.push(...(args[0].value as JavaVal[]));
               return { type: 'boolean', value: true };
             }
             if (mName === 'get') {
@@ -2184,11 +2346,12 @@ export function executeJavaAST(code: string): JavaRunOutput {
             if (mName === 'size') return { type: 'int', value: list.length };
             if (mName === 'isEmpty') return { type: 'boolean', value: list.length === 0 };
             if (mName === 'contains') return { type: 'boolean', value: list.some((x) => x.value === args[0].value) };
+            if (mName === 'indexOf') return { type: 'int', value: list.findIndex((x) => x.value === args[0].value) };
             if (mName === 'clear') {
               list.length = 0;
               return { type: 'void', value: undefined };
             }
-            if (mName === 'toString') return { type: 'String', value: formatJavaVal(targetObj) };
+            if (mName === 'toString') return { type: 'String', value: formatRuntimeVal(targetObj) };
           }
 
           // Built-in Set / HashSet methods
@@ -2207,32 +2370,43 @@ export function executeJavaAST(code: string): JavaRunOutput {
             }
             if (mName === 'size') return { type: 'int', value: setList.length };
             if (mName === 'isEmpty') return { type: 'boolean', value: setList.length === 0 };
-            if (mName === 'toString') return { type: 'String', value: formatJavaVal(targetObj) };
+            if (mName === 'toString') return { type: 'String', value: formatRuntimeVal(targetObj) };
           }
 
           // Built-in Map / HashMap methods
           if (targetObj.type === 'map') {
             const map = targetObj.value as Map<string, { key: JavaVal; val: JavaVal }>;
             if (mName === 'put') {
-              const kStr = formatJavaVal(args[0]);
+              const kStr = formatRuntimeVal(args[0]);
               map.set(kStr, { key: args[0], val: args[1] });
               return args[1];
             }
+            if (mName === 'putIfAbsent') {
+              const kStr = formatRuntimeVal(args[0]);
+              if (!map.has(kStr)) {
+                map.set(kStr, { key: args[0], val: args[1] });
+                return { type: 'null', value: null };
+              }
+              return map.get(kStr)!.val;
+            }
             if (mName === 'get') {
-              const kStr = formatJavaVal(args[0]);
+              const kStr = formatRuntimeVal(args[0]);
               const entry = map.get(kStr);
               return entry ? entry.val : { type: 'null', value: null };
             }
             if (mName === 'getOrDefault') {
-              const kStr = formatJavaVal(args[0]);
+              const kStr = formatRuntimeVal(args[0]);
               const entry = map.get(kStr);
               return entry ? entry.val : args[1];
             }
             if (mName === 'containsKey') {
-              return { type: 'boolean', value: map.has(formatJavaVal(args[0])) };
+              return { type: 'boolean', value: map.has(formatRuntimeVal(args[0])) };
+            }
+            if (mName === 'containsValue') {
+              return { type: 'boolean', value: Array.from(map.values()).some((e) => e.val.value === args[0]?.value) };
             }
             if (mName === 'remove') {
-              const kStr = formatJavaVal(args[0]);
+              const kStr = formatRuntimeVal(args[0]);
               const entry = map.get(kStr);
               map.delete(kStr);
               return entry ? entry.val : { type: 'null', value: null };
@@ -2245,13 +2419,13 @@ export function executeJavaAST(code: string): JavaRunOutput {
             if (mName === 'values') {
               return { type: 'list', value: Array.from(map.values()).map((e) => e.val) };
             }
-            if (mName === 'toString') return { type: 'String', value: formatJavaVal(targetObj) };
+            if (mName === 'toString') return { type: 'String', value: formatRuntimeVal(targetObj) };
           }
 
           // Built-in StringBuilder
           if (targetObj.type === 'stringbuilder') {
             if (mName === 'append') {
-              targetObj.value.str += formatJavaVal(args[0]);
+              targetObj.value.str += formatRuntimeVal(args[0]);
               return targetObj;
             }
             if (mName === 'toString') {
@@ -2272,6 +2446,17 @@ export function executeJavaAST(code: string): JavaRunOutput {
 
           if (targetObj.type === 'object') {
             const inst = targetObj.value as JavaInstance;
+            if (mName === 'getClass' && args.length === 0) {
+              return { type: 'classMeta', value: inst.className };
+            }
+            if (mName === 'printStackTrace' && args.length === 0) {
+              const msg = inst.fields.has('message') ? formatRuntimeVal(inst.fields.get('message')!) : '';
+              stdout += `${inst.className}: ${msg}\n`;
+              return { type: 'void', value: undefined };
+            }
+            if (mName === 'equals' && args.length === 1 && !findMethod(inst.className, 'equals', args)) {
+              return { type: 'boolean', value: inst === args[0]?.value };
+            }
             return invokeMethod(inst, inst.className, mName, args);
           }
         }
@@ -2282,38 +2467,43 @@ export function executeJavaAST(code: string): JavaRunOutput {
   }
 
   try {
-    // Initialize static fields for all classes
+    // Initialize static fields for all classes and interfaces
     for (const c of classes) {
       const sf = staticFields.get(c.name)!;
       const scope = new Scope();
       for (const f of c.fields) {
-        if (f.modifiers.includes('static')) {
+        if (f.modifiers.includes('static') || c.kind === 'interface') {
           const val = f.initExpr ? coerceToType(evalExpr(f.initExpr, scope, null, c.name), f.type) : defaultForType(f.type);
           sf.set(f.name, val);
         }
       }
     }
 
-    const mainClass = classMap.get('Main');
-    if (!mainClass) {
+    // Find entry class: prefer 'Main' if it has a main method, otherwise any class with a 'main' method
+    let entryClass = classMap.get('Main');
+    if (!entryClass || !entryClass.methods.some((m) => m.name === 'main')) {
+      entryClass = classes.find((c) => c.methods.some((m) => m.name === 'main'));
+    }
+
+    if (!entryClass) {
       return {
         success: false,
-        compilationError: 'Main.java:1: error: class Main is missing',
+        compilationError: 'Error: Main method not found, please define:\n   public static void main(String[] args)',
         runtimeError: null,
         stdout: '',
-        stderr: 'Main.java:1: error: class Main is missing',
+        stderr: 'Error: Main method not found',
         executionTimeMs: Date.now() - startTime,
       };
     }
 
-    const mainMethod = mainClass.methods.find((m) => m.name === 'main');
+    const mainMethod = entryClass.methods.find((m) => m.name === 'main');
     if (!mainMethod || !mainMethod.body) {
       return {
         success: false,
-        compilationError: 'Error: Main method not found in class Main, please define the main method as:\n   public static void main(String[] args)',
+        compilationError: 'Error: Main method not found, please define the main method as:\n   public static void main(String[] args)',
         runtimeError: null,
         stdout: '',
-        stderr: 'Error: Main method not found in class Main',
+        stderr: 'Error: Main method not found',
         executionTimeMs: Date.now() - startTime,
       };
     }
@@ -2324,7 +2514,7 @@ export function executeJavaAST(code: string): JavaRunOutput {
     }
 
     try {
-      execBlock(mainMethod.body, mainScope, null, 'Main');
+      execBlock(mainMethod.body, mainScope, null, entryClass.name);
     } catch (sig) {
       if (!(sig instanceof ReturnSignal)) throw sig;
     }

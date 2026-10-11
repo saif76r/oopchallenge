@@ -1,13 +1,12 @@
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
-import { exec, spawn } from 'child_process';
+import { exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
-import { executeJavaAST } from './src/services/javaInterpreter.ts';
+import { executeJavaAST } from './src/services/javaInterpreter';
 
 dotenv.config();
 
@@ -33,7 +32,7 @@ function runExec(cmd: string, cwd: string, timeoutMs: number = 6000): Promise<{ 
 }
 
 // Fallback Java OOP Simulator when system javac/java binary is not installed in container
-async function executeJavaWithFallback(code: string, tempDir: string, startTime: number): Promise<{
+async function executeJavaWithFallback(code: string, tempDir: string | null, startTime: number): Promise<{
   success: boolean;
   compilationError: string | null;
   runtimeError: string | null;
@@ -41,48 +40,38 @@ async function executeJavaWithFallback(code: string, tempDir: string, startTime:
   stderr: string;
   executionTimeMs: number;
 }> {
-  const mainJavaPath = path.join(tempDir, 'Main.java');
-  fs.writeFileSync(mainJavaPath, code, 'utf-8');
+  if (!process.env.VERCEL && tempDir && code.includes('class Main')) {
+    const mainJavaPath = path.join(tempDir, 'Main.java');
+    fs.writeFileSync(mainJavaPath, code, 'utf-8');
 
-  const compileResult = await runExec('javac Main.java', tempDir, 8000);
-  const isJavacMissing =
-    compileResult.code === 127 ||
-    compileResult.stderr.includes('javac: not found') ||
-    compileResult.stderr.includes('command not found');
+    const compileResult = await runExec('javac Main.java', tempDir, 8000);
+    const isJavacMissing =
+      compileResult.code === 127 ||
+      compileResult.stderr.includes('javac: not found') ||
+      compileResult.stderr.includes('command not found');
 
-  if (!isJavacMissing) {
-    if (compileResult.code !== 0) {
+    if (!isJavacMissing) {
+      if (compileResult.code !== 0) {
+        return {
+          success: false,
+          compilationError: compileResult.stderr || compileResult.stdout || 'Compilation failed',
+          runtimeError: null,
+          stdout: '',
+          stderr: compileResult.stderr,
+          executionTimeMs: Date.now() - startTime,
+        };
+      }
+
+      const execResult = await runExec('java -Xmx128m -Xss1m Main', tempDir, 5000);
       return {
-        success: false,
-        compilationError: compileResult.stderr || compileResult.stdout || 'Compilation failed',
-        runtimeError: null,
-        stdout: '',
-        stderr: compileResult.stderr,
+        success: execResult.code === 0,
+        compilationError: null,
+        runtimeError: execResult.code !== 0 ? (execResult.stderr || 'Execution terminated with error') : null,
+        stdout: execResult.stdout,
+        stderr: execResult.stderr,
         executionTimeMs: Date.now() - startTime,
       };
     }
-
-    const execResult = await runExec('java -Xmx128m -Xss1m Main', tempDir, 5000);
-    return {
-      success: execResult.code === 0,
-      compilationError: null,
-      runtimeError: execResult.code !== 0 ? (execResult.stderr || 'Execution terminated with error') : null,
-      stdout: execResult.stdout,
-      stderr: execResult.stderr,
-      executionTimeMs: Date.now() - startTime,
-    };
-  }
-
-  // Fallback when javac is not installed in the slim Node container
-  if (!code.includes('class Main')) {
-    return {
-      success: false,
-      compilationError: 'Main.java:1: error: class Main is public, should be declared in a file named Main.java',
-      runtimeError: null,
-      stdout: '',
-      stderr: 'Main.java:1: error: class Main is missing',
-      executionTimeMs: Date.now() - startTime,
-    };
   }
 
   // Check balanced braces
@@ -338,6 +327,7 @@ async function startServer() {
   const isProd = process.env.NODE_ENV === 'production';
 
   if (!isProd) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
